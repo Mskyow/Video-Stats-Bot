@@ -67,6 +67,20 @@ Telegram-бот для автоматизированной оценки и ан
     └── (опционально: тесты handlers, ai, db)
 ```
 
+## Репозиторий GitHub
+
+Проект уже инициализирован как git-репозиторий (ветка `main`). Чтобы пушить код на GitHub:
+
+1. **Создайте репозиторий на GitHub:** [github.com/new](https://github.com/new) — имя, например, `video-stats-bot`. **Не** добавляйте README, .gitignore или лицензию (всё уже есть локально).
+2. **Привяжите remote и запушьте:**
+
+```bash
+git remote add origin https://github.com/YOUR_USERNAME/video-stats-bot.git
+git push -u origin main
+```
+
+Дальше: `git add .` → `git commit -m "..."` → `git push` — версия на GitHub будет актуальной.
+
 - **Деплой на Railway:** используется `Dockerfile`; при необходимости можно альтернативно запускать через `Procfile` и `python src/main.py`.
 
 ## Переменные окружения
