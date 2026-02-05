@@ -38,6 +38,8 @@ GEMINI_MODEL: str = _get_optional("GEMINI_MODEL") or "gemini-2.0-flash-thinking-
 LOG_LEVEL: str = _get_optional("LOG_LEVEL") or "INFO"
 WEBHOOK_URL: str | None = _get_optional("WEBHOOK_URL")
 WEBHOOK_PATH: str = _get_optional("WEBHOOK_PATH") or "/webhook"
+# Для теста без whitelist: ALLOW_ALL_USERS=1
+ALLOW_ALL_USERS: bool = (os.getenv("ALLOW_ALL_USERS", "").strip().lower() in ("1", "true", "yes"))
 
 
 def setup_logging() -> None:

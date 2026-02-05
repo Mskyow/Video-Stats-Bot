@@ -12,6 +12,7 @@ from typing import Any
 from aiogram import BaseMiddleware
 from aiogram.types import Message, TelegramObject
 
+from src import config
 from src.db.repositories.users import is_user_allowed
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,9 @@ class AuthMiddleware(BaseMiddleware):
         data: dict[str, Any],
     ) -> Any:
         if not isinstance(event, Message) or event.from_user is None:
+            return await handler(event, data)
+
+        if getattr(config, "ALLOW_ALL_USERS", False):
             return await handler(event, data)
 
         user_id = event.from_user.id
