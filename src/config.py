@@ -18,7 +18,10 @@ load_dotenv(_env_path)
 def _get(key: str, default: str | None = None) -> str:
     value = os.getenv(key, default)
     if value is None or value == "":
-        raise ValueError(f"Не задана обязательная переменная окружения: {key}")
+        hint = (
+            " На Railway: Project → Variables. Локально: создайте .env из .env.example."
+        )
+        raise ValueError(f"Не задана обязательная переменная окружения: {key}.{hint}")
     return value.strip()
 
 

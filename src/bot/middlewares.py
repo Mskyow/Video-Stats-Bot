@@ -42,9 +42,11 @@ class AuthMiddleware(BaseMiddleware):
         user_id = event.from_user.id
         allowed = await asyncio.to_thread(is_user_allowed, self.supabase, user_id)
         if not allowed:
-            logger.info("Access denied for user_id=%s", user_id)
+            logger.info("Access denied for user_id=%s (add this id to Supabase users table)", user_id)
             await event.answer(
-                "У вас нет доступа к этому боту. Обратитесь к администратору."
+                "У вас нет доступа к этому боту. Обратитесь к администратору.\n\n"
+                "Админ: добавьте user_id в таблицу users в Supabase (Table Editor → users → Insert). "
+                "Или задайте ALLOW_ALL_USERS=1 в переменных окружения для теста."
             )
             return None
         return await handler(event, data)

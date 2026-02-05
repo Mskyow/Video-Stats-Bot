@@ -85,6 +85,8 @@ git push -u origin main
 
 ## Переменные окружения
 
+**На Railway** обязательно задайте переменные в **Project → Variables** (или Service → Variables). Без них приложение падает при старте с ошибкой вида «Не задана обязательная переменная окружения: TG_TOKEN».
+
 См. файл [.env.example](.env.example). Обязательные ключи:
 
 - `TG_TOKEN` — токен бота Telegram.
