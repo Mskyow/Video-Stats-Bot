@@ -1,1 +1,5 @@
-# Handlers: start, auth, image
+# Роутеры подключаются в main.py к корневому роутеру с auth middleware
+from src.bot.handlers.start import router as start_router
+from src.bot.handlers.image import router as image_router
+
+__all__ = ("start_router", "image_router")
