@@ -43,6 +43,8 @@ WEBHOOK_URL: str | None = _get_optional("WEBHOOK_URL")
 WEBHOOK_PATH: str = _get_optional("WEBHOOK_PATH") or "/webhook"
 # Для теста без whitelist: ALLOW_ALL_USERS=1
 ALLOW_ALL_USERS: bool = (os.getenv("ALLOW_ALL_USERS", "").strip().lower() in ("1", "true", "yes"))
+# Telegram ID администратора (для уведомлений о новых пользователях)
+ADMIN_USER_ID: int | None = int(v) if (v := _get_optional("ADMIN_USER_ID")) else None
 
 
 def setup_logging() -> None:
