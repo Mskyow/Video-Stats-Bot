@@ -1,0 +1,117 @@
+# Video Stats Bot
+
+Telegram-бот для автоматизированной оценки и аналитики видео (TikTok, Reels, Shorts). Сотрудник отправляет скриншот с метриками → бот анализирует через AI → сохраняет в БД → выдаёт отчёт.
+
+## Стек
+
+| Компонент | Технология |
+|-----------|------------|
+| Язык | Python 3.11+ |
+| Бот | aiogram 3.x (асинхронный) |
+| AI | Google Gemini Flash Thinking (OCR + расчёт Score + вывод) |
+| БД | Supabase (PostgreSQL), клиент `supabase` |
+| Деплой | Railway (Docker) |
+
+## Логика работы (Pipeline)
+
+1. **Auth** — проверка пользователя по whitelist (таблица `users` в Supabase).
+2. **Input** — пользователь отправляет изображение (скриншот с метриками).
+3. **AI Processing** — изображение отправляется в Gemini Flash Thinking:
+   - Системный промпт задаёт: OCR цифр, расчёт Score по формуле `VR*50 + ER*30 + Ret*20`, краткий дерзкий вывод.
+   - Ответ — **строго валидный JSON** (без текста «размышлений»): `views`, `likes`, `shares`, `retention`, `score`, `summary`.
+4. **Database** — запись результата в таблицу `videos` (метрики в JSONB, score, analysis).
+5. **Reply** — красивое текстовое сообщение с отчётом в чат.
+
+## Структура проекта
+
+```
+.
+├── README.md
+├── .env.example
+├── .gitignore
+├── Dockerfile
+├── Procfile
+├── requirements.txt
+├── railway.json / railway.toml (опционально)
+├── supabase/
+│   └── migrations/
+│       └── 001_initial.sql
+├── src/
+│   ├── __init__.py
+│   ├── main.py              # точка входа, запуск polling/webhook
+│   ├── config.py            # загрузка настроек из env
+│   ├── bot/
+│   │   ├── __init__.py
+│   │   ├── handlers/
+│   │   │   ├── __init__.py
+│   │   │   ├── auth.py      # middleware / проверка whitelist
+│   │   │   ├── image.py     # приём картинки, вызов AI, ответ
+│   │   │   └── start.py     # /start, help
+│   │   └── middlewares.py
+│   ├── ai/
+│   │   ├── __init__.py
+│   │   ├── gemini.py        # клиент Gemini, промпт, парсинг JSON
+│   │   └── schemas.py       # Pydantic-модели для ответа (views, likes, score, summary)
+│   ├── db/
+│   │   ├── __init__.py
+│   │   ├── supabase_client.py
+│   │   └── repositories/
+│   │       ├── __init__.py
+│   │       ├── users.py     # проверка user_id в whitelist
+│   │       └── videos.py    # вставка в videos
+│   └── formatters/
+│       ├── __init__.py
+│       └── report.py        # форматирование сообщения отчёта для чата
+└── tests/
+    ├── __init__.py
+    └── (опционально: тесты handlers, ai, db)
+```
+
+- **Деплой на Railway:** используется `Dockerfile`; при необходимости можно альтернативно запускать через `Procfile` и `python src/main.py`.
+
+## Переменные окружения
+
+См. файл [.env.example](.env.example). Обязательные ключи:
+
+- `TG_TOKEN` — токен бота Telegram.
+- `GEMINI_API_KEY` — API-ключ Google AI (Gemini).
+- `SUPABASE_URL` — URL проекта Supabase.
+- `SUPABASE_KEY` — service role key (для полного доступа к БД из бота).
+
+Опционально: `LOG_LEVEL`, `WEBHOOK_URL` (если на Railway будет webhook).
+
+## База данных (Supabase)
+
+Таблицы создаются через миграции в `supabase/migrations/`. Основные сущности:
+
+- **users** — whitelist: `id` (bigint, PK), `username`, `role` ('admin' | 'user').
+- **videos** — результаты анализа: `id` (uuid), `user_id` (FK → users), `platform`, `metrics` (JSONB), `score` (float), `analysis` (text), `created_at`.
+
+Подробнее см. [supabase/migrations/001_initial.sql](supabase/migrations/001_initial.sql).
+
+## Деплой на Railway
+
+1. Создайте проект на [Railway](https://railway.app), подключите репозиторий (GitHub/GitLab).
+2. **Сборка:** выберите **Dockerfile** в корне (или оставьте автоопределение — Railway подхватит `Dockerfile` или `Procfile`).
+3. **Переменные окружения:** в настройках сервиса добавьте все ключи из `.env.example`:
+   - `TG_TOKEN`
+   - `GEMINI_API_KEY`
+   - `GEMINI_MODEL` (опционально, по умолчанию можно задать в коде)
+   - `SUPABASE_URL`
+   - `SUPABASE_KEY`
+4. **Запуск:** образ собирается из `Dockerfile`, команда по умолчанию: `python -m src.main` (long polling). Порт для web-сервера не обязателен при polling.
+5. Для **webhook** вместо polling задайте `WEBHOOK_URL` и в коде переключите запуск на `dp.start_webhook(...)`.
+
+Файлы `Procfile` и `railway.toml` опциональны: при наличии Dockerfile Railway использует его в приоритете.
+
+## Идеи по улучшению
+
+- **Валидация ответа AI:** использовать Pydantic для парсинга JSON от Gemini — отсекать невалидные ответы и повторять запрос при необходимости.
+- **Логирование:** структурированные логи (JSON или с полями `user_id`, `message_id`, `duration`) для отладки и аналитики.
+- **Платформа:** определять тип платформы (TikTok/Reels/Shorts) по скриншоту и сохранять в `videos.platform`.
+- **Дедупликация:** опционально хранить хэш изображения и не дублировать анализ для одного и того же скрина.
+- **Rate limit:** ограничение числа запросов в минуту на пользователя, чтобы не превысить лимиты Gemini и не злоупотреблять ботом.
+
+---
+
+*Код бота (handlers, AI, DB, formatters) будет добавлен отдельно; здесь описаны структура и документация.*

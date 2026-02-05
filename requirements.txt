@@ -1,0 +1,12 @@
+# Bot
+aiogram>=3.13,<4
+
+# AI
+google-generativeai>=0.8,<1
+
+# DB
+supabase>=2.10,<3
+
+# Utils
+pydantic>=2.9,<3
+python-dotenv>=1.0,<2
