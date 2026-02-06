@@ -1,6 +1,6 @@
 """
 Загрузка настроек из переменных окружения.
-Обязательные: TG_TOKEN, GEMINI_API_KEY, SUPABASE_URL, SUPABASE_KEY.
+Обязательные: TG_TOKEN, OPENROUTER_API_KEY, SUPABASE_URL, SUPABASE_KEY.
 """
 from __future__ import annotations
 
@@ -32,12 +32,12 @@ def _get_optional(key: str, default: str | None = None) -> str | None:
 
 # Обязательные
 TG_TOKEN: str = _get("TG_TOKEN")
-GEMINI_API_KEY: str = _get("GEMINI_API_KEY")
+OPENROUTER_API_KEY: str = _get("OPENROUTER_API_KEY")
 SUPABASE_URL: str = _get("SUPABASE_URL")
 SUPABASE_KEY: str = _get("SUPABASE_KEY")
 
-# Опциональные
-GEMINI_MODEL: str = _get_optional("GEMINI_MODEL") or "gemini-2.0-flash-thinking-exp"
+# Опциональные (OpenRouter: по умолчанию Gemini 3 Flash с thinking)
+OPENROUTER_MODEL: str | None = _get_optional("OPENROUTER_MODEL")
 LOG_LEVEL: str = _get_optional("LOG_LEVEL") or "INFO"
 WEBHOOK_URL: str | None = _get_optional("WEBHOOK_URL")
 WEBHOOK_PATH: str = _get_optional("WEBHOOK_PATH") or "/webhook"

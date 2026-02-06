@@ -8,7 +8,7 @@ Telegram-бот для автоматизированной оценки и ан
 |-----------|------------|
 | Язык | Python 3.11+ |
 | Бот | aiogram 3.x (асинхронный) |
-| AI | Google Gemini Flash Thinking (OCR + расчёт Score + вывод) |
+| AI | OpenRouter → Gemini 3 Flash (thinking medium): OCR, Score, отчёт |
 | БД | Supabase (PostgreSQL), клиент `supabase` |
 | Деплой | Railway (Docker) |
 
@@ -16,9 +16,9 @@ Telegram-бот для автоматизированной оценки и ан
 
 1. **Auth** — проверка пользователя по whitelist (таблица `users` в Supabase).
 2. **Input** — пользователь отправляет изображение (скриншот с метриками).
-3. **AI Processing** — изображение отправляется в Gemini Flash Thinking:
-   - Системный промпт задаёт: OCR цифр, расчёт Score по формуле `VR*50 + ER*30 + Ret*20`, краткий дерзкий вывод.
-   - Ответ — **строго валидный JSON** (без текста «размышлений»): `views`, `likes`, `shares`, `retention`, `score`, `summary`.
+3. **AI Processing** — изображение отправляется в OpenRouter (модель Gemini 3 Flash, thinking medium):
+   - Системный промпт задаёт: OCR цифр, бенчмарки Tier 1/2, расчёт Score, вердикт и рекомендации.
+   - Ответ — **строго валидный JSON**: `platform`, `metrics`, `score`, `verdict`, `analysis`, `recommendations`.
 4. **Database** — запись результата в таблицу `videos` (метрики в JSONB, score, analysis).
 5. **Reply** — красивое текстовое сообщение с отчётом в чат.
 
@@ -50,8 +50,7 @@ Telegram-бот для автоматизированной оценки и ан
 │   │   └── middlewares.py
 │   ├── ai/
 │   │   ├── __init__.py
-│   │   ├── gemini.py        # клиент Gemini, промпт, парсинг JSON
-│   │   └── schemas.py       # Pydantic-модели для ответа (views, likes, score, summary)
+│   │   └── openrouter_service.py  # OpenRouter (Gemini 3 Flash), промпт, парсинг JSON
 │   ├── db/
 │   │   ├── __init__.py
 │   │   ├── supabase_client.py
@@ -90,11 +89,11 @@ git push -u origin main
 См. файл [.env.example](.env.example). Обязательные ключи:
 
 - `TG_TOKEN` — токен бота Telegram.
-- `GEMINI_API_KEY` — API-ключ Google AI (Gemini).
+- `OPENROUTER_API_KEY` — API-ключ OpenRouter (ключ берётся на [openrouter.ai](https://openrouter.ai)).
 - `SUPABASE_URL` — URL проекта Supabase.
 - `SUPABASE_KEY` — service role key (для полного доступа к БД из бота).
 
-Опционально: `LOG_LEVEL`, `WEBHOOK_URL` (если на Railway будет webhook).
+Опционально: `OPENROUTER_MODEL` (по умолчанию `google/gemini-3-flash-preview`), `LOG_LEVEL`, `WEBHOOK_URL` (если на Railway будет webhook).
 
 ## База данных (Supabase)
 
@@ -111,8 +110,8 @@ git push -u origin main
 2. **Сборка:** выберите **Dockerfile** в корне (или оставьте автоопределение — Railway подхватит `Dockerfile` или `Procfile`).
 3. **Переменные окружения:** в настройках сервиса добавьте все ключи из `.env.example`:
    - `TG_TOKEN`
-   - `GEMINI_API_KEY`
-   - `GEMINI_MODEL` (опционально, по умолчанию можно задать в коде)
+   - `OPENROUTER_API_KEY`
+   - `OPENROUTER_MODEL` (опционально, по умолчанию `google/gemini-3-flash-preview`)
    - `SUPABASE_URL`
    - `SUPABASE_KEY`
 4. **Запуск:** образ собирается из `Dockerfile`, команда по умолчанию: `python -m src.main` (long polling). Порт для web-сервера не обязателен при polling.
@@ -122,11 +121,11 @@ git push -u origin main
 
 ## Идеи по улучшению
 
-- **Валидация ответа AI:** использовать Pydantic для парсинга JSON от Gemini — отсекать невалидные ответы и повторять запрос при необходимости.
+- **Валидация ответа AI:** использовать Pydantic для парсинга JSON от OpenRouter — отсекать невалидные ответы и повторять запрос при необходимости.
 - **Логирование:** структурированные логи (JSON или с полями `user_id`, `message_id`, `duration`) для отладки и аналитики.
 - **Платформа:** определять тип платформы (TikTok/Reels/Shorts) по скриншоту и сохранять в `videos.platform`.
 - **Дедупликация:** опционально хранить хэш изображения и не дублировать анализ для одного и того же скрина.
-- **Rate limit:** ограничение числа запросов в минуту на пользователя, чтобы не превысить лимиты Gemini и не злоупотреблять ботом.
+- **Rate limit:** ограничение числа запросов в минуту на пользователя, чтобы не превысить лимиты OpenRouter и не злоупотреблять ботом.
 
 ---
 

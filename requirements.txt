@@ -1,8 +1,8 @@
 # Bot
 aiogram>=3.13,<4
 
-# AI (google.genai — новый SDK; google-generativeai deprecated)
-google-genai>=1.0,<2
+# AI (OpenRouter: Gemini 3 Flash thinking)
+requests>=2.31,<3
 
 # DB
 supabase>=2.10,<3

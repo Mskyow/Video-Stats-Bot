@@ -33,7 +33,7 @@ def insert_video(
     Args:
         client: Supabase client
         user_id: Telegram user ID
-        result: распарсенный JSON от Gemini
+        result: распарсенный JSON от OpenRouter (Gemini 3 Flash)
         raw_ai_response: сырой текст ответа (для дебага)
 
     Returns:

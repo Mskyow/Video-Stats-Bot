@@ -9,7 +9,7 @@ import logging
 from aiogram import Bot, F, Router
 from aiogram.types import Message
 
-from src.ai.gemini_service import analyze_screenshot
+from src.ai.openrouter_service import analyze_screenshot
 from src.db.repositories.videos import insert_video
 from src.db.supabase_client import get_supabase
 from src.formatters.report import format_report
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 @router.message(F.photo)
 async def handle_photo(message: Message, bot: Bot) -> None:
-    """Скачиваем фото, отправляем в Gemini, форматируем отчёт и сохраняем в БД."""
+    """Скачиваем фото, отправляем в OpenRouter (Gemini 3 Flash), форматируем отчёт и сохраняем в БД."""
     processing_msg = await message.answer("⏳ Анализирую скриншот… Это может занять несколько секунд.")
 
     # Берём самое большое разрешение
@@ -33,7 +33,7 @@ async def handle_photo(message: Message, bot: Bot) -> None:
 
     image_bytes = data.read() if hasattr(data, "read") else bytes(data)
 
-    # Вызов Gemini (синхронный SDK → to_thread)
+    # Вызов OpenRouter (синхронный HTTP → to_thread)
     result, raw_response = await asyncio.to_thread(
         analyze_screenshot,
         image_bytes,

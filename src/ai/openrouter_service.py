@@ -1,37 +1,28 @@
 """
-Анализ скриншотов с метриками видео через Google Gemini.
+Анализ скриншотов с метриками видео через OpenRouter (Gemini 3 Flash, thinking medium).
 
-Используется полный системный промпт с бенчмарками из video_analysis_config.json:
+Используется полный системный промпт с бенчмарками:
 - Tier 1 (Gatekeeper): 3s retention, completion rate, avg watch time
 - Tier 2 (Growth Engine): share rate, save rate, comment rate
-- Expert Heuristics: Platinum Retention Trap, Failed Breakout, Gold Format
-- Decision Tree: приоритизированная логика вердиктов
+- Expert Heuristics, Decision Tree
 
-SDK: google.genai (не deprecated google.generativeai).
+API: OpenRouter (OpenAI-compatible), модель google/gemini-3-flash-preview, reasoning.effort: medium.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from typing import Any
 
-from google import genai
-from google.genai import types
+import requests
 
 from src import config
 
 logger = logging.getLogger(__name__)
 
-# Допустимые модели для generateContent (gemini-3.0-flash не существует — корректно: gemini-2.5-flash, gemini-2.0-flash, gemini-3-flash-preview)
-VALID_GEMINI_MODELS = (
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-001",
-    "gemini-3-flash-preview",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
-)
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_MODEL = "google/gemini-3-flash-preview"
 
 # ---------------------------------------------------------------------------
 # System Prompt: Senior Growth Analyst с полными бенчмарками
@@ -194,10 +185,6 @@ IMPORTANT RULES:
 - If you see a retention/engagement graph, describe what you observe in the notes.
 """
 
-# ---------------------------------------------------------------------------
-# User prompt (дополнение к системному — идёт вместе с изображением)
-# ---------------------------------------------------------------------------
-
 USER_PROMPT = """Analyze this screenshot of video metrics/analytics.
 
 Extract ALL visible numbers, graphs, and data points. Apply the full Metrics Bible benchmarks.
@@ -251,19 +238,16 @@ def _extract_json_object(text: str) -> str | None:
 
 
 def _parse_response(text: str) -> dict[str, Any] | None:
-    """Извлекает JSON из ответа Gemini (убирает markdown-обёртку, ищет объект в тексте)."""
+    """Извлекает JSON из ответа (убирает markdown-обёртку, ищет объект в тексте)."""
     if not text or not text.strip():
         return None
     text = text.strip()
-    # Убираем BOM и лишние пробелы
     if text.startswith("\ufeff"):
         text = text[1:].strip()
-    # Вариант 1: весь ответ — JSON
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    # Вариант 2: markdown ```json ... ``` или ``` ... ```
     if "```" in text:
         lines = text.split("\n")
         out: list[str] = []
@@ -281,27 +265,14 @@ def _parse_response(text: str) -> dict[str, Any] | None:
                 return json.loads("\n".join(out))
             except json.JSONDecodeError:
                 pass
-    # Вариант 3: в тексте есть объект { ... } (вступление от модели и т.д.)
     extracted = _extract_json_object(text)
     if extracted:
         try:
             return json.loads(extracted)
         except json.JSONDecodeError as e:
             logger.warning("JSON from extracted block failed: %s", e)
-    logger.warning("Failed to parse Gemini JSON. Raw (first 600 chars): %s", text[:600])
+    logger.warning("Failed to parse OpenRouter JSON. Raw (first 600 chars): %s", text[:600])
     return None
-
-
-def _normalize_model(name: str) -> str:
-    """Подставляет рабочую модель, если указана несуществующая (например gemini-3.0-flash)."""
-    n = (name or "").strip()
-    if n in VALID_GEMINI_MODELS:
-        return n
-    if n in ("gemini-3.0-flash", "gemini-3.0-flash-preview"):
-        logger.info("Mapping unsupported model %r to gemini-2.0-flash", n)
-        return "gemini-2.0-flash"
-    # Любое другое значение используем как есть (API вернёт ошибку при неверном имени)
-    return n or "gemini-2.0-flash"
 
 
 def analyze_screenshot(
@@ -309,60 +280,70 @@ def analyze_screenshot(
     mime_type: str = "image/jpeg",
 ) -> tuple[dict[str, Any] | None, str | None]:
     """
-    Отправляет скриншот в Gemini с полным системным промптом.
+    Отправляет скриншот в OpenRouter (Gemini 3 Flash, thinking medium).
 
     Returns:
         Tuple (parsed_result, raw_response_text).
         parsed_result: распарсенный JSON или None.
         raw_response_text: сырой текст ответа для дебага.
     """
-    model_name = _normalize_model(config.GEMINI_MODEL)
-    client = genai.Client(api_key=config.GEMINI_API_KEY)
+    model = (config.OPENROUTER_MODEL or DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    api_key = config.OPENROUTER_API_KEY
 
-    image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
-    contents = [image_part, USER_PROMPT]
+    b64 = base64.standard_b64encode(image_bytes).decode("ascii")
+    data_uri = f"data:{mime_type};base64,{b64}"
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": USER_PROMPT},
+                {"type": "image_url", "image_url": {"url": data_uri}},
+            ],
+        },
+    ]
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 8192,
+        "reasoning": {"effort": "medium"},
+    }
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/video-stats-bot",
+    }
 
     try:
-        response = client.models.generate_content(
-            model=model_name,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-            ),
+        resp = requests.post(
+            OPENROUTER_URL,
+            json=payload,
+            headers=headers,
+            timeout=120,
         )
-        if not response:
-            logger.warning("Gemini returned None")
+        resp.raise_for_status()
+        data = resp.json()
+
+        choices = data.get("choices") or []
+        if not choices:
+            logger.warning("OpenRouter returned no choices")
             return None, None
 
-        # Проверяем блокировку (safety, empty candidate)
-        if getattr(response, "prompt_feedback", None):
-            pf = response.prompt_feedback
-            if getattr(pf, "block_reason", None):
-                logger.warning(
-                    "Gemini blocked prompt: block_reason=%s",
-                    getattr(pf, "block_reason", "unknown"),
-                )
-                return None, None
-        candidates = getattr(response, "candidates", None) or []
-        if candidates:
-            c = candidates[0]
-            if getattr(c, "finish_reason", None) not in (None, "STOP", "FINISH_REASON_STOP", "MAX_TOKENS"):
-                logger.warning(
-                    "Gemini candidate finish_reason=%s",
-                    getattr(c, "finish_reason", "unknown"),
-                )
-            for r in getattr(c, "safety_ratings", None) or []:
-                if getattr(r, "probability", None) and str(getattr(r, "probability", "")).endswith("HIGH"):
-                    logger.warning("Gemini safety rating HIGH: %s", r)
-
-        raw_text = getattr(response, "text", None) or ""
-        if not raw_text.strip():
-            logger.warning("Empty Gemini response text (candidates: %s)", len(candidates))
+        msg = choices[0].get("message") or {}
+        raw_text = (msg.get("content") or "").strip()
+        if not raw_text:
+            logger.warning("OpenRouter empty content in message")
             return None, None
 
         parsed = _parse_response(raw_text)
         return parsed, raw_text
 
-    except Exception as e:
-        logger.exception("Gemini analyze_screenshot failed: %s", e)
+    except requests.RequestException as e:
+        logger.exception("OpenRouter request failed: %s", e)
+        return None, None
+    except (KeyError, TypeError, ValueError) as e:
+        logger.exception("OpenRouter response parse failed: %s", e)
         return None, None
