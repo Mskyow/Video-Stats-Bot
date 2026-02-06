@@ -6,6 +6,8 @@
 - Tier 2 (Growth Engine): share rate, save rate, comment rate
 - Expert Heuristics: Platinum Retention Trap, Failed Breakout, Gold Format
 - Decision Tree: приоритизированная логика вердиктов
+
+SDK: google.genai (не deprecated google.generativeai).
 """
 from __future__ import annotations
 
@@ -13,11 +15,23 @@ import json
 import logging
 from typing import Any
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from src import config
 
 logger = logging.getLogger(__name__)
+
+# Допустимые модели для generateContent (gemini-3.0-flash не существует — корректно: gemini-2.5-flash, gemini-2.0-flash, gemini-3-flash-preview)
+VALID_GEMINI_MODELS = (
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-001",
+    "gemini-3-flash-preview",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+)
 
 # ---------------------------------------------------------------------------
 # System Prompt: Senior Growth Analyst с полными бенчмарками
@@ -189,32 +203,105 @@ USER_PROMPT = """Analyze this screenshot of video metrics/analytics.
 Extract ALL visible numbers, graphs, and data points. Apply the full Metrics Bible benchmarks.
 Follow the Decision Tree to arrive at the final verdict.
 
-Remember:
-- Identify the platform from the UI
-- Read retention graphs if visible
-- Calculate engagement rates from raw numbers
-- Apply expert heuristics if conditions match
-- Give a clear verdict and actionable recommendations
+Rules:
+- Identify the platform from the UI (TikTok / YouTube Shorts / Reels).
+- Read retention and engagement graphs if visible.
+- Calculate engagement rates from raw numbers (share_rate = shares/views*100, etc.).
+- Apply expert heuristics if conditions match.
+- If the image does NOT show analytics (no views, no metrics, wrong content), still respond with valid JSON: set "platform" to "other", use null for missing metrics, verdict "🟡 ITERATE", and in "analysis" briefly state what you see (e.g. "Screenshot does not show video analytics.").
+
+Output: reply with ONLY the JSON object. No text before or after, no markdown code fences, no explanation—just the single JSON object starting with { and ending with }.
 """
 
 
+def _extract_json_object(text: str) -> str | None:
+    """Находит первый полный JSON-объект { ... } в тексте (по скобкам)."""
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    quote = None
+    i = start
+    while i < len(text):
+        c = text[i]
+        if escape:
+            escape = False
+            i += 1
+            continue
+        if c == "\\" and in_string:
+            escape = True
+            i += 1
+            continue
+        if not in_string:
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+            elif c in ("'", '"'):
+                in_string = True
+                quote = c
+        elif c == quote:
+            in_string = False
+        i += 1
+    return None
+
+
 def _parse_response(text: str) -> dict[str, Any] | None:
-    """Извлекает JSON из ответа Gemini (убирает markdown-обёртку если есть)."""
+    """Извлекает JSON из ответа Gemini (убирает markdown-обёртку, ищет объект в тексте)."""
+    if not text or not text.strip():
+        return None
     text = text.strip()
-    # Убираем markdown code fences
-    if text.startswith("```"):
-        lines = text.split("\n")
-        # Первая строка может быть ```json или просто ```
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        text = "\n".join(lines)
+    # Убираем BOM и лишние пробелы
+    if text.startswith("\ufeff"):
+        text = text[1:].strip()
+    # Вариант 1: весь ответ — JSON
     try:
         return json.loads(text)
-    except json.JSONDecodeError as e:
-        logger.warning("Failed to parse Gemini JSON response: %s\nRaw: %s", e, text[:500])
-        return None
+    except json.JSONDecodeError:
+        pass
+    # Вариант 2: markdown ```json ... ``` или ``` ... ```
+    if "```" in text:
+        lines = text.split("\n")
+        out: list[str] = []
+        in_block = False
+        for line in lines:
+            if line.strip().startswith("```"):
+                in_block = not in_block
+                if in_block:
+                    continue
+                break
+            if in_block:
+                out.append(line)
+        if out:
+            try:
+                return json.loads("\n".join(out))
+            except json.JSONDecodeError:
+                pass
+    # Вариант 3: в тексте есть объект { ... } (вступление от модели и т.д.)
+    extracted = _extract_json_object(text)
+    if extracted:
+        try:
+            return json.loads(extracted)
+        except json.JSONDecodeError as e:
+            logger.warning("JSON from extracted block failed: %s", e)
+    logger.warning("Failed to parse Gemini JSON. Raw (first 600 chars): %s", text[:600])
+    return None
+
+
+def _normalize_model(name: str) -> str:
+    """Подставляет рабочую модель, если указана несуществующая (например gemini-3.0-flash)."""
+    n = (name or "").strip()
+    if n in VALID_GEMINI_MODELS:
+        return n
+    if n in ("gemini-3.0-flash", "gemini-3.0-flash-preview"):
+        logger.info("Mapping unsupported model %r to gemini-2.0-flash", n)
+        return "gemini-2.0-flash"
+    # Любое другое значение используем как есть (API вернёт ошибку при неверном имени)
+    return n or "gemini-2.0-flash"
 
 
 def analyze_screenshot(
@@ -229,22 +316,50 @@ def analyze_screenshot(
         parsed_result: распарсенный JSON или None.
         raw_response_text: сырой текст ответа для дебага.
     """
-    genai.configure(api_key=config.GEMINI_API_KEY)
-    model = genai.GenerativeModel(
-        model_name=config.GEMINI_MODEL,
-        system_instruction=SYSTEM_PROMPT,
-    )
+    model_name = _normalize_model(config.GEMINI_MODEL)
+    client = genai.Client(api_key=config.GEMINI_API_KEY)
 
-    image_part = {"inline_data": {"mime_type": mime_type, "data": image_bytes}}
+    image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
     contents = [image_part, USER_PROMPT]
 
     try:
-        response = model.generate_content(contents)
-        if not response or not response.text:
-            logger.warning("Empty or blocked Gemini response")
+        response = client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+            ),
+        )
+        if not response:
+            logger.warning("Gemini returned None")
             return None, None
 
-        raw_text = response.text
+        # Проверяем блокировку (safety, empty candidate)
+        if getattr(response, "prompt_feedback", None):
+            pf = response.prompt_feedback
+            if getattr(pf, "block_reason", None):
+                logger.warning(
+                    "Gemini blocked prompt: block_reason=%s",
+                    getattr(pf, "block_reason", "unknown"),
+                )
+                return None, None
+        candidates = getattr(response, "candidates", None) or []
+        if candidates:
+            c = candidates[0]
+            if getattr(c, "finish_reason", None) not in (None, "STOP", "FINISH_REASON_STOP", "MAX_TOKENS"):
+                logger.warning(
+                    "Gemini candidate finish_reason=%s",
+                    getattr(c, "finish_reason", "unknown"),
+                )
+            for r in getattr(c, "safety_ratings", None) or []:
+                if getattr(r, "probability", None) and str(getattr(r, "probability", "")).endswith("HIGH"):
+                    logger.warning("Gemini safety rating HIGH: %s", r)
+
+        raw_text = getattr(response, "text", None) or ""
+        if not raw_text.strip():
+            logger.warning("Empty Gemini response text (candidates: %s)", len(candidates))
+            return None, None
+
         parsed = _parse_response(raw_text)
         return parsed, raw_text
 
