@@ -87,9 +87,9 @@ def export_hook_to_sheet(video_data: dict[str, Any]) -> bool:
             - score (float): Общий балл видео.
             - platform (str): Платформа (TikTok, Reels, Shorts).
             - title (str | None): Название видео.
-            - hook_score (str | None): Оценка хука (FAIL/BORDERLINE/GOOD/SCALE).
+            - hook_type (str | None): Тип хука (Short/Medium/Long).
             - tier_1_analysis (dict | None): Детальный анализ с retention_3s.
-
+    
     Returns:
         True, если экспорт выполнен; False — если произошла ошибка.
     """
@@ -103,33 +103,34 @@ def export_hook_to_sheet(video_data: dict[str, Any]) -> bool:
         # Извлекаем данные
         platform = video_data.get("platform") or "Unknown"
         title = video_data.get("title") or "-"
-        hook_score = video_data.get("hook_score") or "-"
-        score = float(video_data.get("score") or 0)
-
+        hook_type = video_data.get("hook_type") or "-"
+        
         # Retention 3s из tier_1_analysis
         tier_1 = video_data.get("tier_1_analysis") or {}
         retention_3s = "-"
         if tier_1.get("hook_3s"):
             retention_3s = tier_1["hook_3s"].get("retention_3s", "-")
+            # Fallback if retention_3s key is missing but value is there
+            if retention_3s == "-" and "value" in tier_1["hook_3s"]:
+                 retention_3s = tier_1["hook_3s"]["value"]
 
         verdict = video_data.get("verdict") or "-"
 
-        # Формируем строку
+        # Формируем строку: [Date] | [Platform] | [Video Title] | [Hook Type] | [Retention 3s] | [Verdict]
         row = [
             date.today().isoformat(),
             platform,
             title,
-            hook_score,
+            hook_type,
             retention_3s,
             verdict,
         ]
 
         worksheet.append_row(row)
         logger.info(
-            "Exported hook to sheet: platform=%s, hook_score=%s, score=%.1f",
+            "Exported hook to sheet: platform=%s, title=%s",
             platform,
-            hook_score,
-            score,
+            title,
         )
         return True
 

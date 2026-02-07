@@ -41,8 +41,6 @@ OPENROUTER_MODEL: str | None = _get_optional("OPENROUTER_MODEL")
 LOG_LEVEL: str = _get_optional("LOG_LEVEL") or "INFO"
 WEBHOOK_URL: str | None = _get_optional("WEBHOOK_URL")
 WEBHOOK_PATH: str = _get_optional("WEBHOOK_PATH") or "/webhook"
-# Для теста без whitelist: ALLOW_ALL_USERS=1
-ALLOW_ALL_USERS: bool = (os.getenv("ALLOW_ALL_USERS", "").strip().lower() in ("1", "true", "yes"))
 # Telegram ID администратора (для уведомлений о новых пользователях)
 ADMIN_USER_ID: int | None = int(v) if (v := _get_optional("ADMIN_USER_ID")) else None
 
@@ -51,6 +49,7 @@ GOOGLE_SHEET_CREDENTIALS_PATH: str | None = _get_optional("GOOGLE_SHEET_CREDENTI
 GOOGLE_SHEET_ID: str | None = _get_optional("GOOGLE_SHEET_ID")
 # Название листа в таблице (например "Hooks CRM" или "Hook Analytics")
 GOOGLE_SHEET_WORKSHEET_NAME: str = _get_optional("GOOGLE_SHEET_WORKSHEET_NAME") or "Hook Analytics"
+REPORT_CHAT_ID: int | None = int(v) if (v := _get_optional("REPORT_CHAT_ID")) else None
 
 
 def setup_logging() -> None:

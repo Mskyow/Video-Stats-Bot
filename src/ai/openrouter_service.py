@@ -133,10 +133,19 @@ Determines "Hit" vs "Norm".
 4. Retention "Good" + Share Rate "OK" (0.5–1.0%) → 🟡 ITERATE / POTENTIAL GOLD FORMAT
 5. Views ≥ 3000 (or Spike) + Share Rate > 1.5% → 🚀 SCALE HARD
 
+## MULTI-IMAGE INSTRUCTIONS
+- You will receive TWO images per video.
+- Image 1: Overview Metrics (engagement numbers, views, etc.)
+- Image 2: Retention Graph (audience retention visualization)
+- Combine data from BOTH images to build the complete analysis.
+- Extract the visible text/headline from the video screenshot to name the video. Return it in the JSON field 'video_title'.
+- Detect platform (tiktok/reels) automatically from UI icons and colors.
+
 ## OUTPUT FORMAT
 Respond ONLY with valid JSON (no markdown fences, no extra text). Use this exact structure:
 
 {
+  "video_title": "<extracted video title/headline from screenshot or null>",
   "platform": "tiktok" | "youtube_shorts" | "reels" | "other",
   "video_duration_sec": <number or null>,
   "metrics": {
@@ -185,17 +194,22 @@ IMPORTANT RULES:
 - If you see a retention/engagement graph, describe what you observe in the notes.
 """
 
-USER_PROMPT = """Analyze this screenshot of video metrics/analytics.
+USER_PROMPT = """Analyze the provided images of video metrics/analytics.
 
-Extract ALL visible numbers, graphs, and data points. Apply the full Metrics Bible benchmarks.
+You will receive TWO images:
+1. Overview Metrics: engagement numbers, views, etc.
+2. Retention Graph: audience retention visualization
+
+Extract ALL visible numbers, graphs, and data points from BOTH images. Apply the full Metrics Bible benchmarks.
 Follow the Decision Tree to arrive at the final verdict.
 
 Rules:
-- Identify the platform from the UI (TikTok / YouTube Shorts / Reels).
+- Identify the platform from the UI (TikTok / YouTube Shorts / Reels) - detect automatically from icons and colors.
+- Extract the visible text/headline from the video screenshot as 'video_title'.
 - Read retention and engagement graphs if visible.
 - Calculate engagement rates from raw numbers (share_rate = shares/views*100, etc.).
 - Apply expert heuristics if conditions match.
-- If the image does NOT show analytics (no views, no metrics, wrong content), still respond with valid JSON: set "platform" to "other", use null for missing metrics, verdict "🟡 ITERATE", and in "analysis" briefly state what you see (e.g. "Screenshot does not show video analytics.").
+- If the images do NOT show analytics (no views, no metrics, wrong content), still respond with valid JSON: set "platform" to "other", set "video_title" to null, use null for missing metrics, verdict "🟡 ITERATE", and in "analysis" briefly state what you see (e.g. "Screenshot does not show video analytics.").
 
 Output: reply with ONLY the JSON object. No text before or after, no markdown code fences, no explanation—just the single JSON object starting with { and ending with }.
 """
@@ -276,11 +290,15 @@ def _parse_response(text: str) -> dict[str, Any] | None:
 
 
 def analyze_screenshot(
-    image_bytes: bytes,
+    images_list: list[bytes],
     mime_type: str = "image/jpeg",
 ) -> tuple[dict[str, Any] | None, str | None]:
     """
-    Отправляет скриншот в OpenRouter (Gemini 3 Flash, thinking medium).
+    Отправляет скриншоты в OpenRouter (Gemini 3 Flash, thinking medium).
+
+    Args:
+        images_list: Список байтов изображений (2 изображения: [Overview Metrics, Retention Graph]).
+        mime_type: MIME-тип изображений (по умолчанию image/jpeg).
 
     Returns:
         Tuple (parsed_result, raw_response_text).
@@ -290,17 +308,19 @@ def analyze_screenshot(
     model = (config.OPENROUTER_MODEL or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     api_key = config.OPENROUTER_API_KEY
 
-    b64 = base64.standard_b64encode(image_bytes).decode("ascii")
-    data_uri = f"data:{mime_type};base64,{b64}"
+    # Build content array with text prompt and all images
+    content: list[dict[str, Any]] = [{"type": "text", "text": USER_PROMPT}]
+
+    for image_bytes in images_list:
+        b64 = base64.standard_b64encode(image_bytes).decode("ascii")
+        data_uri = f"data:{mime_type};base64,{b64}"
+        content.append({"type": "image_url", "image_url": {"url": data_uri}})
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": [
-                {"type": "text", "text": USER_PROMPT},
-                {"type": "image_url", "image_url": {"url": data_uri}},
-            ],
+            "content": content,
         },
     ]
 

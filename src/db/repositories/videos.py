@@ -52,6 +52,10 @@ def insert_video(
 
         # Объединяем метрики и rates в одно поле
         full_metrics = {**metrics, **calculated_rates}
+        
+        # Add hook_type to metrics if present
+        if result.get("hook_type"):
+            full_metrics["hook_type"] = result.get("hook_type")
 
         # Детальный анализ: tier_1 + tier_2 + heuristics + recommendations
         detailed = {
@@ -97,6 +101,107 @@ def insert_video(
     except Exception as e:
         logger.exception("insert_video failed: %s", e)
         return None
+
+
+def get_videos_by_date_range(
+    client: Client | None,
+    start_date: str,
+    end_date: str,
+) -> list[dict[str, Any]]:
+    """
+    Возвращает список видео за указанный диапазон дат, отсортированных по score DESC.
+    """
+    if client is None:
+        return []
+    try:
+        # Assuming created_at is a timestamp or date string
+        # Supabase filtering: gte (>=) start_date, lte (<=) end_date
+        # Note: If end_date is just a date 'YYYY-MM-DD', we might need to adjust for time
+        # but typically Supabase handles ISO strings. 
+        # For full day inclusion, end_date might need to be 'YYYY-MM-DD 23:59:59' or similar if passing datetime.
+        # But keeping it simple as passed strings.
+        
+        resp = (
+            client.table("videos")
+            .select("*")
+            .gte("created_at", start_date)
+            .lte("created_at", end_date)
+            .order("score", desc=True)
+            .execute()
+        )
+        return resp.data or []
+    except Exception as e:
+        logger.exception("get_videos_by_date_range failed: %s", e)
+        return []
+
+
+def get_global_stats(client: Client | None) -> dict[str, Any]:
+    """
+    Возвращает глобальную статистику:
+    - total_count (int)
+    - avg_score (float)
+    - high_watch_time_count (count where avg_watch_time > 60%)
+    - high_retention_count (count where retention_3s > 70%)
+    """
+    if client is None:
+        return {}
+    try:
+        # We need to fetch all videos or use aggregate queries if Supabase/PostgREST supports them well.
+        # Client-side aggregation might be heavy if many videos, but for now it's likely fine.
+        # Or we can use RPC calls if defined. Assuming client-side for simplicity as per requirements.
+        
+        resp = client.table("videos").select("*").execute()
+        videos = resp.data or []
+        
+        total_count = len(videos)
+        if total_count == 0:
+            return {
+                "total_count": 0,
+                "avg_score": 0.0,
+                "high_watch_time_count": 0,
+                "high_retention_count": 0,
+            }
+
+        total_score = sum(float(v.get("score") or 0) for v in videos)
+        avg_score = total_score / total_count
+
+        high_watch_time_count = 0
+        high_retention_count = 0
+
+        for v in videos:
+            metrics = v.get("metrics") or {}
+            
+            # Check avg_watch_time > 60%
+            # Ensure we handle percentage strings or numbers (e.g. 0.65 or 65)
+            # Based on prompt, avg_watch_time_pct is likely a number (e.g. 65.5).
+            # We should check both cases to be safe.
+            awt = metrics.get("avg_watch_time_pct")
+            if awt is not None:
+                try:
+                    if float(awt) > 60: # Assuming 0-100 scale based on prompt
+                         high_watch_time_count += 1
+                except (ValueError, TypeError):
+                    pass
+            
+            # Check retention_3s > 70%
+            # Also check metrics for retention_3s
+            r3s = metrics.get("retention_3s")
+            if r3s is not None:
+                try:
+                    if float(r3s) > 70:
+                        high_retention_count += 1
+                except (ValueError, TypeError):
+                    pass
+
+        return {
+            "total_count": total_count,
+            "avg_score": round(avg_score, 1),
+            "high_watch_time_count": high_watch_time_count,
+            "high_retention_count": high_retention_count,
+        }
+    except Exception as e:
+        logger.exception("get_global_stats failed: %s", e)
+        return {}
 
 
 def get_user_videos(
