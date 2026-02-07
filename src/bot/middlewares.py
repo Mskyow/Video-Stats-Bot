@@ -31,22 +31,19 @@ from src.db.repositories.users import get_user_status, register_user
 logger = logging.getLogger(__name__)
 
 PENDING_MESSAGE = (
-    "👋 Ваша заявка на доступ к боту принята!\n\n"
-    "⏳ Ожидайте одобрения администратором.\n"
-    "Вам придёт уведомление, как только доступ будет открыт."
+    "⏳ Заявка на рассмотрении.\n\n"
+    "Доступ откроется после одобрения администратором."
 )
 
 REJECTED_MESSAGE = (
-    "❌ К сожалению, ваша заявка на доступ была отклонена.\n\n"
-    "Если вы считаете, что это ошибка — свяжитесь с администратором."
+    "❌ Доступ отклонён.\n\n"
+    "По вопросам обратись к администратору."
 )
 
 FIRST_CONTACT_MESSAGE = (
-    "👋 Добро пожаловать!\n\n"
-    "Я бот для анализа метрик видео (TikTok, Reels, Shorts).\n"
-    "Ваша заявка автоматически отправлена администратору на одобрение.\n\n"
-    "⏳ Пожалуйста, подождите — как только админ одобрит доступ, "
-    "вы сможете отправлять скриншоты для анализа."
+    "👋 Заявка отправлена!\n\n"
+    "Я анализирую метрики видео из TikTok, Reels, Shorts.\n"
+    "Как только админ одобрит доступ — присылай скриншоты аналитики."
 )
 
 
@@ -136,12 +133,11 @@ class AuthMiddleware(BaseMiddleware):
         name = user.full_name or "—"
 
         text = (
-            "🆕 <b>Новый пользователь!</b>\n\n"
-            f"👤 <b>Имя:</b> {name}\n"
-            f"🔗 <b>Username:</b> {username}\n"
-            f"🆔 <b>ID:</b> <code>{user.id}</code>\n\n"
-            "Для одобрения: измените <code>status</code> на <code>approved</code> "
-            "в таблице <code>users</code> в Supabase Dashboard."
+            "🆕 Новый пользователь\n\n"
+            f"👤 {name}\n"
+            f"🔗 {username}\n"
+            f"🆔 <code>{user.id}</code>\n\n"
+            "Для одобрения: <code>status = approved</code> в Supabase"
         )
 
         try:

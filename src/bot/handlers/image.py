@@ -70,8 +70,8 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
         return
 
     processing_msg = await message.answer(
-        f"⏳ Получено изображений: {len(messages)}. \n"
-        f"Анализирую {len(pairs)} видео параллельно... Это может занять 15-30 секунд."
+        f"⏳ Скриншотов: {len(messages)} | Видео: {len(pairs)}\n"
+        f"Анализирую... (~15-30 сек)"
     )
 
     # 2. Параллельная обработка (The Engine)
@@ -103,7 +103,7 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
             index=idx,
             success=False,
             is_orphan=True,
-            error_message="⚠️ Непарный скриншот (нужна пара: Обзор + Удержание)."
+            error_message="⚠️ Непарный скриншот — нужна пара: Обзор + Удержание"
         ))
 
     # Сортируем результаты по индексу для отчета
@@ -198,7 +198,7 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
             return VideoProcessingResult(
                 index=index,
                 success=False,
-                error_message="⚠️ AI не смог распознать метрики."
+                error_message="⚠️ Не удалось распознать метрики"
             )
             
         # Успешный анализ
@@ -230,37 +230,37 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
         return VideoProcessingResult(
             index=index,
             success=False,
-            error_message=f"⚠️ Ошибка обработки: {str(e)[:50]}"
+            error_message=f"⚠️ Ошибка: {str(e)[:40]}"
         )
 
 
 def build_summary_report(results: list[VideoProcessingResult], saved: int, failed: int, total_images: int) -> str:
     """Формирует итоговое сообщение для пользователя."""
-    
-    header = (
-        "✅ **Batch Processing Complete**\n"
-        f"📥 Received: {len(results)} videos ({total_images} images)\n"
-        f"💾 Saved: {saved}\n"
-        f"❌ Failed: {failed}\n\n"
-        "**Details:**"
-    )
-    
-    lines = []
+
+    total = len(results)
+    lines = [
+        f"✅ Готово: {total} видео",
+        f"💾 Сохранено: {saved} | ❌ Ошибок: {failed}",
+        ""
+    ]
+
     for res in results:
         if res.success:
-            # 1. [TikTok] 'Title' — 92/100 (Scale)
             platform = res.ai_result.get("platform", "Unknown").capitalize() if res.ai_result else "Video"
-            # Обрезаем заголовок если длинный
             title = res.video_title or "Untitled"
-            if len(title) > 20:
-                title = title[:20] + "..."
-            
-            line = f"{res.index}. [{platform}] '{title}' — {res.score}/100 ({res.rating_label})"
+            if len(title) > 18:
+                title = title[:18] + "…"
+
+            icon = "🟢"
+            if res.rating_label == "Kill":
+                icon = "🔴"
+            elif res.rating_label == "Iterate":
+                icon = "🟡"
+
+            line = f"{icon} {res.index}. [{platform}] {title} — {res.score}/100"
             lines.append(line)
         else:
-            # Ошибки
-            error_msg = res.error_message or "Unknown error"
-            line = f"{res.index}. {error_msg}"
-            lines.append(line)
-            
-    return header + "\n" + "\n".join(lines)
+            error_msg = res.error_message or "Ошибка"
+            lines.append(f"⚠️ {res.index}. {error_msg}")
+
+    return "\n".join(lines)

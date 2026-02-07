@@ -16,35 +16,35 @@ router = Router(name="start")
 
 START_TEXT = (
     "👋 <b>Привет! Я — Creator Copilot.</b>\n\n"
-    "Я анализирую метрики твоих видео (TikTok, Reels, Shorts) "
-    "на уровне Senior Growth Analyst.\n\n"
-    "<b>Что я делаю:</b>\n"
-    "📸 Принимаю скриншоты аналитики видео\n"
-    "📊 Оцениваю Hook, Retention, Completion, Engagement\n"
-    "🎯 Даю вердикт: KILL / ITERATE / SCALE HARD\n"
-    "💡 Предлагаю конкретные действия для роста\n\n"
-    "<b>Как использовать:</b>\n"
-    "Просто отправь скриншот с метриками видео — я сделаю полный разбор.\n\n"
-    "/help — справка\n"
-    "/stats — твоя статистика анализов"
+    "Анализирую метрики видео из TikTok, Instagram Reels и YouTube Shorts. "
+    "Скажу, что работает, что нет — и что делать дальше.\n\n"
+    "<b>Команды:</b>\n"
+    "📸 Отправь скриншоты аналитики — получишь разбор\n"
+    "/help — как пользоваться ботом\n"
+    "/stats — твоя статистика\n"
+    "/day_stats — отчёт за 24 часа\n"
+    "/all_stats — общая статистика"
 )
 
 HELP_TEXT = (
-    "<b>📖 Справка</b>\n\n"
-    "Отправь скриншот аналитики видео (из TikTok, YouTube Studio, Instagram Insights).\n\n"
-    "<b>Что должно быть на скриншоте:</b>\n"
-    "• Основные метрики (просмотры, лайки, комментарии, репосты, сохранения)\n"
-    "• Графики retention / engagement (если есть)\n"
-    "• Overview панель аналитики\n\n"
-    "<b>Мои бенчмарки:</b>\n"
-    "• Hook (3s): 60%+ = Good, 70%+ = Viral Potential\n"
-    "• Completion: зависит от длительности (60-90%+ для коротких)\n"
-    "• Share Rate: 1.5%+ = Scale Signal\n\n"
+    "<b>📖 Как пользоваться</b>\n\n"
+    "<b>Что отправлять:</b>\n"
+    "Скриншоты аналитики из TikTok, YouTube Studio или Instagram Insights. "
+    "Лучше всего работают 2 скриншота: Обзор (метрики) + График удержания.\n\n"
+    "<b>Что анализирую:</b>\n"
+    "• Hook (3 сек) — цепляет ли начало\n"
+    "• Retention — как долго смотрят\n"
+    "• Engagement — лайки, комменты, репосты\n\n"
+    "<b>Бенчмарки (норма для шортс):</b>\n"
+    "Hook (3с): 🔴 &lt;55% (Плохо) | 🟡 55-70% (Норм) | 🟢 70%+ (Хорошо)\n"
+    "Досмотр: 🔴 &lt;40% (Плохо) | 🟡 40-70% (Норм) | 🟢 70%+ (Хорошо)\n"
+    "ER (вовлечение): 🔴 &lt;5% (Плохо) | 🟡 5-10% (Норм) | 🟢 10%+ (Хорошо)\n"
+    "Репосты: 🔴 &lt;0.5% | 🟡 0.5-1.5% | 🟢 1.5%+\n"
+    "Сохранения: 🔴 &lt;1% | 🟡 1-3% | 🟢 3%+\n\n"
     "<b>Вердикты:</b>\n"
-    "🔴 KILL — контент не работает, не итерируй\n"
-    "✂️ FIX BODY — хук ок, но тело видео проседает\n"
+    "🔴 KILL — не трать время, идея не зашла\n"
     "🟡 ITERATE — есть потенциал, доработай\n"
-    "🚀 SCALE HARD — формат работает, масштабируй!"
+    "🟢 SCALE — отлично, делай больше таких"
 )
 
 
@@ -75,8 +75,8 @@ async def cmd_stats(message: Message) -> None:
 
     if not stats or stats.get("total", 0) == 0:
         await message.answer(
-            "📊 У тебя ещё нет анализов.\n"
-            "Отправь скриншот с метриками видео, чтобы начать!"
+            "📊 Пока нет анализов.\n\n"
+            "Отправь скриншоты метрик видео — начну считать статистику."
         )
         return
 
@@ -89,27 +89,18 @@ async def cmd_stats(message: Message) -> None:
     lines = [
         f"📊 <b>Твоя статистика</b>",
         "",
-        f"📋 Всего анализов: <b>{total}</b>",
-        f"📈 Средний Score: <b>{avg}/100</b>",
-        "",
+        f"📋 Анализов: <b>{total}</b>",
+        f"📈 Средний балл: <b>{avg}/100</b>",
     ]
 
-    if hook_stats:
-        lines.append("<b>📌 Hook (по записям):</b>")
-        for h, count in sorted(hook_stats.items(), key=lambda x: -x[1]):
-            if h != "unknown":
-                lines.append(f"  {h}: {count}")
-        if hook_stats.get("unknown"):
-            lines.append(f"  без оценки: {hook_stats['unknown']}")
-        lines.append("")
-
     if verdicts:
+        lines.append("")
         lines.append("<b>Вердикты:</b>")
         for v, count in sorted(verdicts.items(), key=lambda x: -x[1]):
             lines.append(f"  {v}: {count}")
-        lines.append("")
 
     if platforms:
+        lines.append("")
         lines.append("<b>Платформы:</b>")
         for p, count in sorted(platforms.items(), key=lambda x: -x[1]):
             lines.append(f"  {p.upper()}: {count}")

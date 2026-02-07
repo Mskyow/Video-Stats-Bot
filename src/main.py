@@ -110,7 +110,7 @@ async def main() -> None:
             
             if not videos:
                 try:
-                     await bot_instance.send_message(chat_id, "📊 Daily Report: No videos analyzed in the last 24 hours.")
+                     await bot_instance.send_message(chat_id, "📊 За последние 24 часа нет анализов.")
                 except Exception as e:
                      logger.warning(f"Failed to send empty report: {e}")
                 return
@@ -127,7 +127,7 @@ async def main() -> None:
                     plat = "YouTube Shorts"
                 grouped.setdefault(plat, []).append(v)
 
-            lines = [f"📊 Daily Report for {now_minsk.strftime('%d.%m')} (Minsk Time)"]
+            lines = [f"📊 Отчёт за {now_minsk.strftime('%d.%m')}"]
 
             for plat, v_list in grouped.items():
                 lines.append(f"\n📱 <b>{plat}</b>")

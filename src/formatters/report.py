@@ -52,6 +52,27 @@ def _rating_emoji(rating: str | None) -> str:
     return "⚪"
 
 
+def _get_benchmark_label(metric_type: str, value: float | None) -> str:
+    """Возвращает оценку уровня метрики (Плохо/Норм/Хорошо)."""
+    if value is None:
+        return ""
+
+    benchmarks = {
+        "hook": [(55, "Плохо"), (70, "Норм"), (100, "Хорошо")],
+        "completion": [(40, "Плохо"), (70, "Норм"), (100, "Хорошо")],
+        "watch_time": [(30, "Плохо"), (50, "Норм"), (100, "Хорошо")],
+        "er": [(5, "Плохо"), (10, "Норм"), (100, "Хорошо")],
+        "share_rate": [(0.5, "Плохо"), (1.5, "Норм"), (100, "Хорошо")],
+        "save_rate": [(1, "Плохо"), (3, "Норм"), (100, "Хорошо")],
+        "comment_rate": [(0.3, "Плохо"), (1, "Норм"), (100, "Хорошо")],
+    }
+
+    for threshold, label in benchmarks.get(metric_type, []):
+        if value < threshold:
+            return label
+    return "Хорошо"
+
+
 def format_report(data: dict[str, Any]) -> str:
     """
     Формирует детальный отчёт из результата AI.
@@ -70,108 +91,98 @@ def format_report(data: dict[str, Any]) -> str:
 
     lines: list[str] = []
 
-    # Header: Вердикт
-    lines.append(f"<b>{verdict}</b>")
-    lines.append("")
-
-    # Платформа и Score
+    # Заголовок с вердиктом и оценкой
     score_str = f"{score}/100" if isinstance(score, (int, float)) else "—"
-    lines.append(f"📊 <b>Платформа:</b> {platform}")
-    if duration:
-        lines.append(f"⏱ <b>Длительность:</b> ~{duration}с")
-    lines.append(f"📈 <b>Score:</b> {score_str}")
+    lines.append(f"<b>{verdict}</b> | {score_str}")
+    lines.append(f"📊 {platform}{f' | ~{duration}с' if duration else ''}")
     lines.append("")
 
-    # --- RAW METRICS ---
-    lines.append("━━━ <b>Метрики</b> ━━━")
+    # Метрики в одной строке если возможно
+    metric_parts = []
     if metrics.get("views") is not None:
-        lines.append(f"  👁 Просмотры: {_fmt_number(metrics['views'])}")
+        metric_parts.append(f"👁 {_fmt_number(metrics['views'])}")
     if metrics.get("likes") is not None:
-        lines.append(f"  ❤ Лайки: {_fmt_number(metrics['likes'])}")
+        metric_parts.append(f"❤ {_fmt_number(metrics['likes'])}")
     if metrics.get("comments") is not None:
-        lines.append(f"  💬 Комментарии: {_fmt_number(metrics['comments'])}")
+        metric_parts.append(f"💬 {_fmt_number(metrics['comments'])}")
     if metrics.get("shares") is not None:
-        lines.append(f"  🔄 Репосты: {_fmt_number(metrics['shares'])}")
+        metric_parts.append(f"🔄 {_fmt_number(metrics['shares'])}")
     if metrics.get("saves") is not None:
-        lines.append(f"  📌 Сохранения: {_fmt_number(metrics['saves'])}")
-    lines.append("")
+        metric_parts.append(f"📌 {_fmt_number(metrics['saves'])}")
+    if metric_parts:
+        lines.append(" | ".join(metric_parts))
+        lines.append("")
 
-    # --- TIER 1: GATEKEEPER ---
+    # Tier 1: Основные метрики с бенчмарками
     if tier_1:
-        lines.append("━━━ <b>Tier 1: Foundation</b> ━━━")
+        lines.append("<b>Основные метрики:</b>")
+        lines.append("<code>Норма: 🔴 Плохо | 🟡 Норм | 🟢 Хорошо</code>")
 
         hook = tier_1.get("hook_3s") or {}
         if hook:
             emoji = _rating_emoji(hook.get("rating"))
             val = _fmt_pct(hook.get("value"))
-            rating = hook.get("rating", "—")
-            lines.append(f"  {emoji} <b>Hook (3s):</b> {val} → {rating}")
-            if hook.get("note"):
-                lines.append(f"     <i>{hook['note']}</i>")
+            label = _get_benchmark_label("hook", hook.get("value"))
+            lines.append(f"  {emoji} Hook (3с): {val} — {label}")
 
         compl = tier_1.get("completion") or {}
         if compl:
             emoji = _rating_emoji(compl.get("rating"))
             val = _fmt_pct(compl.get("value"))
-            rating = compl.get("rating", "—")
-            bracket = compl.get("duration_bracket", "")
-            bracket_str = f" ({bracket})" if bracket else ""
-            lines.append(f"  {emoji} <b>Completion:</b> {val} → {rating}{bracket_str}")
-            if compl.get("note"):
-                lines.append(f"     <i>{compl['note']}</i>")
+            label = _get_benchmark_label("completion", compl.get("value"))
+            lines.append(f"  {emoji} Досмотр: {val} — {label}")
 
         awt = tier_1.get("avg_watch_time") or {}
         if awt:
             emoji = _rating_emoji(awt.get("rating"))
             val = _fmt_pct(awt.get("value"))
-            rating = awt.get("rating", "—")
-            lines.append(f"  {emoji} <b>Avg Watch Time:</b> {val} → {rating}")
-            if awt.get("note"):
-                lines.append(f"     <i>{awt['note']}</i>")
+            label = _get_benchmark_label("watch_time", awt.get("value"))
+            lines.append(f"  {emoji} Среднее время: {val} — {label}")
 
         lines.append("")
 
-    # --- TIER 2: GROWTH ---
+    # Tier 2: Вовлечение с бенчмарками
     if tier_2:
-        lines.append("━━━ <b>Tier 2: Growth</b> ━━━")
-        vol = tier_2.get("volume_condition", "—")
-        vol_label = "📈 High Volume" if vol == "high_volume" else "📉 Low Volume"
-        lines.append(f"  {vol_label}")
-
-        for key, label in [("share_rate", "Share Rate"), ("save_rate", "Save Rate"), ("comment_rate", "Comment Rate")]:
-            item = tier_2.get(key) or {}
-            if item and item.get("value") is not None:
-                emoji = _rating_emoji(item.get("rating"))
-                val = _fmt_pct(item.get("value"))
-                rating = item.get("rating", "—")
-                lines.append(f"  {emoji} <b>{label}:</b> {val} → {rating}")
+        lines.append("<b>Вовлечение (ER):</b>")
+        lines.append("<code>Норма: 🔴 Плохо | 🟡 Норм | 🟢 Хорошо</code>")
 
         er = tier_2.get("aggregated_er") or {}
         if er and er.get("value") is not None:
             emoji = _rating_emoji(er.get("rating"))
             val = _fmt_pct(er.get("value"))
-            rating = er.get("rating", "—")
-            lines.append(f"  {emoji} <b>Aggregated ER:</b> {val} → {rating}")
+            label = _get_benchmark_label("er", er.get("value"))
+            lines.append(f"  {emoji} Общий ER: {val} — {label}")
+
+        for key, label_name, bench_key in [
+            ("share_rate", "Репосты", "share_rate"),
+            ("save_rate", "Сохранения", "save_rate"),
+            ("comment_rate", "Комменты", "comment_rate"),
+        ]:
+            item = tier_2.get(key) or {}
+            if item and item.get("value") is not None:
+                emoji = _rating_emoji(item.get("rating"))
+                val = _fmt_pct(item.get("value"))
+                label = _get_benchmark_label(bench_key, item.get("value"))
+                lines.append(f"  {emoji} {label_name}: {val} — {label}")
 
         lines.append("")
 
-    # --- Expert Heuristics ---
+    # Сигналы
     if heuristics:
-        lines.append("━━━ <b>Expert Signals</b> ━━━")
+        lines.append("<b>Сигналы:</b>")
         for h in heuristics:
-            lines.append(f"  ⚡ {h}")
+            lines.append(f"  • {h}")
         lines.append("")
 
-    # --- Analysis ---
-    lines.append("━━━ <b>Анализ</b> ━━━")
-    lines.append(analysis)
-    lines.append("")
+    # Анализ
+    lines.append(f"<b>Вывод:</b> {analysis}")
 
-    # --- Recommendations ---
+    # Рекомендации
     if recommendations:
-        lines.append("━━━ <b>Рекомендации</b> ━━━")
-        for i, rec in enumerate(recommendations, 1):
-            lines.append(f"  {i}. {rec}")
+        lines.append("")
+        lines.append("<b>Что делать:</b>")
+        for rec in recommendations:
+            lines.append(f"  → {rec}")
 
     result = "\n".join(lines)
 

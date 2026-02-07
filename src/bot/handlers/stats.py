@@ -39,9 +39,8 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
     if not supabase_client:
         logger.error("supabase_client not found in handler kwargs for /day_stats")
         await message.answer(
-            "⚠️ <b>Ошибка сервера</b>\n\n"
-            "Не удалось подключиться к базе данных. "
-            "Пожалуйста, попробуйте позже или обратитесь к администратору."
+            "⚠️ Ошибка подключения к базе данных.\n"
+            "Попробуй позже."
         )
         return
 
@@ -74,9 +73,8 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
 
         if not videos:
             await message.answer(
-                "📊 <b>Статистика за последние 24 часа</b>\n\n"
-                "За последние 24 часа не было проанализировано ни одного видео.\n\n"
-                "Отправьте скриншоты метрик видео для анализа, чтобы они появились в отчете."
+                "📊 За последние 24 часа нет анализов.\n\n"
+                "Отправь скриншоты метрик видео."
             )
             return
 
@@ -94,7 +92,7 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
             grouped.setdefault(plat, []).append(v)
 
         # Format output with Minsk date
-        lines = [f"📊 Report for {now_minsk.strftime('%d.%m')} (Minsk Time)"]
+        lines = [f"📊 Отчёт за {now_minsk.strftime('%d.%m')}"]
 
         for plat, v_list in grouped.items():
             lines.append(f"\n📱 <b>{plat}</b>")
@@ -142,9 +140,8 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
     except Exception as e:
         logger.exception("Error fetching day stats: %s", e)
         await message.answer(
-            "⚠️ <b>Ошибка при получении статистики</b>\n\n"
-            f"Произошла ошибка: {str(e)}\n\n"
-            "Пожалуйста, попробуйте позже или обратитесь к администратору."
+            "⚠️ Ошибка при получении статистики.\n"
+            "Попробуй позже."
         )
 
 
@@ -161,9 +158,8 @@ async def cmd_all_stats(message: Message, **kwargs) -> None:
     if not supabase_client:
         logger.error("supabase_client not found in handler kwargs for /all_stats")
         await message.answer(
-            "⚠️ <b>Ошибка сервера</b>\n\n"
-            "Не удалось подключиться к базе данных. "
-            "Пожалуйста, попробуйте позже или обратитесь к администратору."
+            "⚠️ Ошибка подключения к базе данных.\n"
+            "Попробуй позже."
         )
         return
 
@@ -171,10 +167,9 @@ async def cmd_all_stats(message: Message, **kwargs) -> None:
         stats = get_global_stats(supabase_client)
         if not stats:
             await message.answer(
-                "📈 <b>Глобальная статистика</b>\n\n"
-                "Не удалось получить статистику.\n\n"
-                "Возможно, в базе данных еще нет записей о видео. "
-                "Отправьте скриншоты метрик для анализа."
+                "📈 Не удалось получить статистику.\n\n"
+                "Возможно, в базе ещё нет записей. "
+                "Отправь скриншоты метрик."
             )
             return
 
@@ -185,25 +180,22 @@ async def cmd_all_stats(message: Message, **kwargs) -> None:
 
         if total == 0:
             await message.answer(
-                "📈 <b>Глобальная статистика</b>\n\n"
-                "В базе данных еще нет проанализированных видео.\n\n"
-                "Отправьте скриншоты метрик видео для анализа, чтобы они появились в статистике."
+                "📈 В базе ещё нет видео.\n\n"
+                "Отправь скриншоты метрик для анализа."
             )
             return
 
         text = (
-            "📈 <b>Глобальная статистика</b>\n\n"
-            f"Всего видео проанализировано: <b>{total}</b>\n"
+            "📈 <b>Общая статистика</b>\n\n"
+            f"Всего видео: <b>{total}</b>\n"
             f"Средний балл: <b>{avg:.1f}</b>\n"
-            f"Высокое время просмотра (>60%): <b>{high_watch}</b>\n"
-            f"Высокий Retention (>70%): <b>{high_retention}</b>"
+            f"Высокий Retention: <b>{high_retention}</b>"
         )
         await message.answer(text)
         
     except Exception as e:
         logger.exception("Error fetching global stats: %s", e)
         await message.answer(
-            "⚠️ <b>Ошибка при получении статистики</b>\n\n"
-            f"Произошла ошибка: {str(e)}\n\n"
-            "Пожалуйста, попробуйте позже или обратитесь к администратору."
+            "⚠️ Ошибка при получении статистики.\n"
+            "Попробуй позже."
         )
