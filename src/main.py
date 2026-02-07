@@ -8,6 +8,7 @@ import logging
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import BotCommand
 
 from src import config
 from src.bot.handlers import image_router, start_router, stats_router
@@ -26,6 +27,18 @@ def _setup_dispatch(dp: Dispatcher, bot: Bot) -> None:
     dp.include_router(root)
 
 
+async def setup_bot_commands(bot: Bot) -> None:
+    """Настройка меню команд бота."""
+    commands = [
+        BotCommand(command="start", description="Запуск"),
+        BotCommand(command="help", description="Справка"),
+        BotCommand(command="day_stats", description="Отчет за сегодня (New)"),
+        BotCommand(command="all_stats", description="Общая статистика (New)"),
+        BotCommand(command="stats", description="Мои анализы"),
+    ]
+    await bot.set_my_commands(commands)
+
+
 async def main() -> None:
     config.setup_logging()
     logger.info("Starting Video Stats Bot (aiogram 3.x)")
@@ -36,6 +49,7 @@ async def main() -> None:
     )
     dp = Dispatcher()
     _setup_dispatch(dp, bot)
+    await setup_bot_commands(bot)
 
     if config.WEBHOOK_URL:
         # Webhook: нужен запущенный HTTP-сервер и заданный WEBHOOK_URL
