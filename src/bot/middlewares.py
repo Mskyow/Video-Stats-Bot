@@ -94,6 +94,8 @@ class AuthMiddleware(BaseMiddleware):
         if status == "approved":
             # Обновляем профильные данные (username мог смениться)
             await self._ensure_registered(event)
+            # Добавляем supabase_client в data для использования в хендлерах
+            data["supabase_client"] = self.supabase
             return await handler(event, data)
 
         if status == "rejected":
