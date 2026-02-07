@@ -15,6 +15,7 @@ aiohttp>=3.9,<4
 
 # Google Sheets (для ежедневных отчётов)
 gspread>=5.0,<6
+oauth2client>=4.1.3
 
 # Планировщик задач (ежедневные отчёты)
 apscheduler>=3.10,<4
