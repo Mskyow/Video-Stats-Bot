@@ -88,13 +88,24 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
 
     # 2. Параллельная обработка (The Engine)
     tasks = []
+    
+    # Обработка пар
     for idx, (msg1, msg2) in enumerate(pairs, start=1):
-        tasks.append(process_single_video(idx, msg1, msg2, bot))
+        tasks.append(process_video_group(idx, [msg1, msg2], bot))
 
-    # Добавляем "орфанные" (непарные) как ошибки
+    # Обработка одиночных (орфанов) - пробуем извлечь хоть что-то
+    # ЕСЛИ пользователь настаивает на парной системе, то орфаны - это ошибки.
+    # Но мы оставим возможность обработки, просто пометим как Warning.
+    # Однако, по новому требованию: "лучше оставить эту систему пожестче... чтобы вот это было понимание".
+    # Значит, орфаны НЕ обрабатываем как видео, а сразу помечаем ошибкой.
+    
+    # start_orphan_idx = len(pairs) + 1
+    # for i, orphan_msg in enumerate(orphans):
+    #    tasks.append(process_video_group(start_orphan_idx + i, [orphan_msg], bot))
+
     results: list[VideoProcessingResult] = []
     
-    # Запускаем задачи
+    # Запускаем задачи (только пары)
     if tasks:
         processed_results = await asyncio.gather(*tasks, return_exceptions=True)
         
@@ -102,20 +113,20 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
             if isinstance(res, VideoProcessingResult):
                 results.append(res)
             elif isinstance(res, Exception):
-                # Критическая ошибка в таске (не должна случаться, т.к. внутри catch-all)
                 logger.error("Critical error in worker task: %s", res)
-                # Добавляем заглушку ошибки
-                results.append(VideoProcessingResult(index=0, success=False, error_message=str(res)))
+                results.append(VideoProcessingResult(
+                    index=0, 
+                    success=False, 
+                    error_message=f"System Error: {str(res)[:50]}"
+                ))
 
-    # Обработка непарных (skipped)
+    # Добавляем ошибки для непарных скриншотов (Strict Mode)
     for i, orphan_msg in enumerate(orphans):
-        # Индекс продолжаем после пар
-        idx = len(pairs) + 1 + i
         results.append(VideoProcessingResult(
-            index=idx,
+            index=len(pairs) + 1 + i,
             success=False,
             is_orphan=True,
-            error_message="⚠️ Непарный скриншот — нужна пара: Обзор + Удержание"
+            error_message="⚠️ Непарный скриншот (нужно 2 фото на видео)"
         ))
 
     # Сортируем результаты по индексу для отчета
@@ -167,15 +178,14 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
         await message.answer(report_text)
 
 
-async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bot) -> VideoProcessingResult:
+async def process_video_group(index: int, messages: list[Message], bot: Bot) -> VideoProcessingResult:
     """
-    Скачивает два фото, отправляет в AI, возвращает результат.
-    Не падает при ошибках (Fault Tolerance).
+    Скачивает все фото из группы, отправляет в AI как одно видео.
     """
     try:
         # Скачиваем фото параллельно
         # Берем photo[-1] (наилучшее качество)
-        photos = [msg1.photo[-1], msg2.photo[-1]] # type: ignore
+        photos = [msg.photo[-1] for msg in messages if msg.photo]
         
         # Функция для скачивания с ретраями/обработкой
         async def download(file_id: str) -> bytes:
@@ -193,13 +203,11 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
                 # Простейший retry logic можно добавить здесь, но для скорости пока без него
                 raise
         
-        # Параллельная загрузка двух файлов
-        images_bytes = await asyncio.gather(
-            download(photos[0].file_id),
-            download(photos[1].file_id)
-        )
+        # Параллельная загрузка
+        tasks = [download(photo.file_id) for photo in photos]
+        images_bytes = await asyncio.gather(*tasks)
         
-        # AI Анализ (в треде, т.к. requests синхронный)
+        # AI Анализ
         result_json, raw_response = await asyncio.to_thread(
             analyze_screenshot,
             list(images_bytes),
@@ -217,7 +225,7 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
         title = result_json.get("video_title") or f"Video #{index}"
         score = result_json.get("score", 0)
         
-        # Определение рейтинга для краткости (Kill/Iterate/Scale)
+        # Определение рейтинга
         verdict = result_json.get("verdict", "")
         rating_label = "N/A"
         if "KILL" in verdict:

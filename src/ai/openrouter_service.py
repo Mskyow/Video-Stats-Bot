@@ -13,6 +13,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 import requests
@@ -138,14 +140,18 @@ Determines "Hit" vs "Norm".
 - Image 1: Overview Metrics (engagement numbers, views, etc.)
 - Image 2: Retention Graph (audience retention visualization)
 - Combine data from BOTH images to build the complete analysis.
-- Extract the visible text/headline from the video screenshot to name the video. Return it in the JSON field 'video_title'.
-- Detect platform (tiktok/reels) automatically from UI icons and colors.
+- **OCR Date:** Extract the posting date and convert it strictly to 'YYYY-MM-DD HH:MM:SS' format (UTC). If the screenshot says '2 days ago', calculate the date based on the Current Reference Time. Field: `posted_at`.
+- **OCR Title:** Extract the visible video headline/text. Field: `video_title`.
+- **Hook Type:** Analyze pacing/length. Field: `hook_type` ('Short', 'Medium', 'Long').
+- **Raw Metrics:** Extract all visible numbers (views, likes, shares, retention_3s, avg_watch_time) as raw integers/floats.
 
 ## OUTPUT FORMAT
 Respond ONLY with valid JSON (no markdown fences, no extra text). Use this exact structure:
 
 {
   "video_title": "<extracted video title/headline from screenshot or null>",
+  "posted_at": "<extracted date string or null>",
+  "hook_type": "Short" | "Medium" | "Long",
   "platform": "tiktok" | "youtube_shorts" | "reels" | "other",
   "video_duration_sec": <number or null>,
   "metrics": {
@@ -196,19 +202,23 @@ IMPORTANT RULES:
 
 USER_PROMPT = """Analyze the provided images of video metrics/analytics.
 
-You will receive TWO images:
-1. Overview Metrics: engagement numbers, views, etc.
-2. Retention Graph: audience retention visualization
+Current Reference Time: {current_time_str}
 
-Extract ALL visible numbers, graphs, and data points from BOTH images. Apply the full Metrics Bible benchmarks.
+You will receive multiple images (usually pairs of Overview + Retention).
+
+Extract ALL visible numbers, graphs, and data points. Apply the full Metrics Bible benchmarks.
 Follow the Decision Tree to arrive at the final verdict.
 
 Rules:
 - Identify the platform from the UI (TikTok / YouTube Shorts / Reels) - detect automatically from icons and colors.
 - Extract the visible text/headline from the video screenshot as 'video_title'.
+- **OCR Date:** Extract the posting date and convert it strictly to 'YYYY-MM-DD HH:MM:SS' format (UTC). If the screenshot says '2 days ago', calculate the date based on the Current Reference Time provided above.
+- **Hook Type:** Determine 'hook_type' (Short/Medium/Long) based on pacing or duration.
 - Read retention and engagement graphs if visible.
 - Calculate engagement rates from raw numbers (share_rate = shares/views*100, etc.).
 - Apply expert heuristics if conditions match.
+- **FAULT TOLERANCE:** If any metric is not visible or cannot be recognized, use `null` (or appropriate placeholder string like "Not Found" if asked). DO NOT FAIL or return invalid JSON. Just leave the field as null or empty.
+- **Image Pairing:** You might receive images in any order. Determine which image corresponds to which part of the analysis (Overview vs Retention). Treat them as a single context for one video.
 - If the images do NOT show analytics (no views, no metrics, wrong content), still respond with valid JSON: set "platform" to "other", set "video_title" to null, use null for missing metrics, verdict "🟡 ITERATE", and in "analysis" briefly state what you see (e.g. "Screenshot does not show video analytics.").
 
 Output: reply with ONLY the JSON object. No text before or after, no markdown code fences, no explanation—just the single JSON object starting with { and ending with }.
@@ -308,8 +318,12 @@ def analyze_screenshot(
     model = (config.OPENROUTER_MODEL or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     api_key = config.OPENROUTER_API_KEY
 
+    # Get current Minsk time (GMT+3) for reference
+    current_time_str = datetime.now(ZoneInfo("Europe/Minsk")).strftime("%Y-%m-%d %H:%M:%S GMT+3")
+
     # Build content array with text prompt and all images
-    content: list[dict[str, Any]] = [{"type": "text", "text": USER_PROMPT}]
+    user_prompt_with_time = USER_PROMPT.format(current_time_str=current_time_str)
+    content: list[dict[str, Any]] = [{"type": "text", "text": user_prompt_with_time}]
 
     for image_bytes in images_list:
         b64 = base64.standard_b64encode(image_bytes).decode("ascii")

@@ -133,6 +133,11 @@ def register_user(
         return None
 
 
+def promote_user_to_approved(client: Client | None, telegram_id: int) -> bool:
+    """Promotes user to 'approved' status."""
+    return update_user_status(client, telegram_id, "approved")
+
+
 def update_user_status(
     client: Client | None,
     telegram_id: int,

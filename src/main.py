@@ -12,7 +12,7 @@ from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeCha
 
 from src import config
 from src.bot.handlers import image_router, start_router, stats_router
-from src.bot.middlewares import AuthMiddleware
+from src.bot.middlewares.album import AlbumMiddleware
 from src.db.supabase_client import get_client
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,13 @@ def _setup_dispatch(dp: Dispatcher, bot: Bot) -> None:
     """Регистрирует роутеры и middleware."""
     root = Router(name="root")
     supabase = get_client(config.SUPABASE_URL, config.SUPABASE_KEY)
+    
+    # 1. Сначала собираем альбомы
+    root.message.middleware(AlbumMiddleware(latency=0.6))
+    
+    # 2. Потом проверяем авторизацию
     root.message.middleware(AuthMiddleware(supabase, bot))
+    
     root.include_routers(start_router, image_router, stats_router)
     dp.include_router(root)
 

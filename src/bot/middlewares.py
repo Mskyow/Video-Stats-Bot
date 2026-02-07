@@ -26,14 +26,17 @@ from typing import Any, ClassVar
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import Message, TelegramObject
 
-from src.db.repositories.users import get_user_status, register_user
+from src.db.repositories.users import get_user_status, register_user, promote_user_to_approved
+from src.config import AUTH_SECRET
 
 logger = logging.getLogger(__name__)
 
 PENDING_MESSAGE = (
-    "⏳ Заявка на рассмотрении.\n\n"
-    "Доступ откроется после одобрения администратором."
+    "🔒 Bot is private.\n\n"
+    "Please send the access code."
 )
+
+ACCESS_GRANTED_MESSAGE = "Доступ разрешён✅"
 
 REJECTED_MESSAGE = (
     "❌ Доступ отклонён.\n\n"
@@ -41,9 +44,9 @@ REJECTED_MESSAGE = (
 )
 
 FIRST_CONTACT_MESSAGE = (
-    "👋 Заявка отправлена!\n\n"
+    "👋 Привет!\n\n"
     "Я анализирую метрики видео из TikTok, Reels, Shorts.\n"
-    "Как только админ одобрит доступ — присылай скриншоты аналитики."
+    "Отправь код доступа, чтобы начать пользоваться."
 )
 
 
@@ -69,24 +72,14 @@ class AuthMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         user_id = event.from_user.id
+        # Проверяем секретный код в сообщении
+        text = getattr(event, "text", "") or ""
+        is_secret_code = text.strip() == AUTH_SECRET
 
         # Проверяем текущий статус
         status = await asyncio.to_thread(
             get_user_status, self.supabase, user_id
         )
-
-        if status is None:
-            # Новый пользователь — регистрируем
-            await self._ensure_registered(event)
-            await event.answer(FIRST_CONTACT_MESSAGE)
-            logger.info(
-                "New user registered: id=%s, username=%s",
-                user_id,
-                event.from_user.username,
-            )
-            # Уведомляем админа о новом пользователе
-            await self._notify_admin_new_user(event)
-            return None
 
         if status == "approved":
             # Обновляем профильные данные (username мог смениться)
@@ -95,12 +88,40 @@ class AuthMiddleware(BaseMiddleware):
             data["supabase_client"] = self.supabase
             return await handler(event, data)
 
+        # Если код верный - регистрируем/аппрувим
+        if is_secret_code:
+            await self._ensure_registered(event)
+            success = await asyncio.to_thread(
+                promote_user_to_approved, self.supabase, user_id
+            )
+            if success:
+                logger.info("User %s approved via secret code", user_id)
+                await event.answer(ACCESS_GRANTED_MESSAGE)
+                return None
+            else:
+                logger.error("Failed to approve user %s", user_id)
+                await event.answer("⚠️ Ошибка при активации доступа. Попробуйте позже.")
+                return None
+
         if status == "rejected":
             logger.info("Rejected user attempted access: id=%s", user_id)
             await event.answer(REJECTED_MESSAGE)
             return None
 
-        # status == "pending"
+        # status == "pending" или None (новый пользователь)
+        if status is None:
+            # Новый пользователь — регистрируем как pending
+            await self._ensure_registered(event)
+            logger.info(
+                "New user registered: id=%s, username=%s",
+                user_id,
+                event.from_user.username,
+            )
+            await self._notify_admin_new_user(event)
+            await event.answer(FIRST_CONTACT_MESSAGE)
+            return None
+
+        # Уже зарегистрирован, но pending
         logger.info("Pending user attempted access: id=%s", user_id)
         await event.answer(PENDING_MESSAGE)
         return None

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -98,19 +98,27 @@ def _get_worksheet(client: gspread.Client) -> gspread.Worksheet:
     return worksheet
 
 
-def export_hook_to_sheet(video_data: dict[str, Any]) -> bool:
+def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
     """
-    Экспортирует данные видео (хука) в существующий Google Sheet.
-
-    Отправляет ВСЕ хуки без фильтрации по score.
+    Экспортирует полные данные видео в Google Sheet.
+    
+    Колонки (Strict Order):
+    - Col A: Processed At (Current Timestamp)
+    - Col B: Posted At (Normalized date from AI)
+    - Col C: Age (Hours) (Video age from metrics)
+    - Col D: Platform (TikTok/Reels)
+    - Col E: Video Title (OCR)
+    - Col F: Hook Type (Short/Medium/Long)
+    - Col G: Score (0-100)
+    - Col H: Verdict (KILL/ITERATE/SCALE)
+    - Col I: Views (Raw Int)
+    - Col J: Likes (Raw Int)
+    - Col K: Shares (Raw Int)
+    - Col L: Retention 3s (Raw %)
+    - Col M: Avg Watch Time (Raw)
 
     Args:
-        video_data: Словарь с данными видео, содержащий:
-            - score (float): Общий балл видео.
-            - platform (str): Платформа (TikTok, Reels, Shorts).
-            - title (str | None): Название видео.
-            - hook_type (str | None): Тип хука (Short/Medium/Long).
-            - tier_1_analysis (dict | None): Детальный анализ с retention_3s.
+        video_data: Словарь с результатами анализа AI.
     
     Returns:
         True, если экспорт выполнен; False — если произошла ошибка.
@@ -119,57 +127,112 @@ def export_hook_to_sheet(video_data: dict[str, Any]) -> bool:
     if not credentials_configured or not GOOGLE_SHEET_ID:
         logger.debug("Google Sheets not configured; skip export")
         return False
+        
     try:
         client = _get_client()
         worksheet = _get_worksheet(client)
 
-        # Извлекаем данные
-        platform = video_data.get("platform") or "Unknown"
-        title = video_data.get("title") or "-"
-        hook_type = video_data.get("hook_type") or "-"
+        # 1. Подготовка данных (Mapping)
         
-        # Retention 3s из tier_1_analysis
-        tier_1 = video_data.get("tier_1_analysis") or {}
-        retention_3s = "-"
-        if tier_1.get("hook_3s"):
-            retention_3s = tier_1["hook_3s"].get("retention_3s", "-")
-            # Fallback if retention_3s key is missing but value is there
-            if retention_3s == "-" and "value" in tier_1["hook_3s"]:
-                 retention_3s = tier_1["hook_3s"]["value"]
+        # A: Processed At
+        processed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # B: Posted At (normalized date from AI)
+        posted_at = video_data.get("posted_at")
+        if not posted_at:
+            posted_at = "Not Found"
 
-        verdict = video_data.get("verdict") or "-"
+        # C: Age (Hours)
+        metrics = video_data.get("metrics") or {}
+        age_hours = metrics.get("age_hours")
+        age_hours_val = f"{age_hours:.1f}" if age_hours is not None else "Not Found"
 
-        # Формируем строку: [Date] | [Platform] | [Video Title] | [Hook Type] | [Retention 3s] | [Verdict]
+        # D: Platform
+        platform = video_data.get("platform")
+        if platform:
+             platform = str(platform).capitalize()
+        else:
+             platform = "Not Recognized"
+        
+        # D: Video Title
+        video_title = video_data.get("video_title")
+        if not video_title:
+            video_title = "Not Found"
+        
+        # E: Hook Type
+        hook_type = video_data.get("hook_type")
+        if not hook_type:
+            hook_type = "Not Found"
+            
+        # F: Score
+        score = video_data.get("score")
+        if score is None:
+            score = 0
+            
+        # G: Verdict
+        verdict = video_data.get("verdict")
+        if not verdict:
+            verdict = "Not Found"
+        
+        # H: Views
+        views = metrics.get("views")
+        if views is None:
+            views = "Not Found"
+        
+        # I: Likes
+        likes = metrics.get("likes")
+        if likes is None:
+            likes = "Not Found"
+        
+        # J: Shares
+        shares = metrics.get("shares")
+        if shares is None:
+            shares = "Not Found"
+        
+        # K: Retention 3s
+        retention_3s = metrics.get("retention_3s")
+        # Fallback to tier_1 if missing in metrics
+        if retention_3s is None:
+            tier_1 = video_data.get("tier_1_analysis") or {}
+            if tier_1.get("hook_3s"):
+                retention_3s = tier_1["hook_3s"].get("value")
+        
+        retention_3s_val = f"{retention_3s}%" if retention_3s is not None else "Not Found"
+        
+        # L: Avg Watch Time
+        # Looking for avg_watch_time_pct in metrics
+        avg_watch_time = metrics.get("avg_watch_time_pct")
+        avg_watch_time_val = f"{avg_watch_time}%" if avg_watch_time is not None else "Not Found"
+
+        # Формируем строку
         row = [
-            date.today().isoformat(),
-            platform,
-            title,
-            hook_type,
-            retention_3s,
-            verdict,
+            processed_at,     # A
+            posted_at,        # B
+            age_hours_val,    # C
+            platform,         # D
+            video_title,      # E
+            hook_type,        # F
+            score,            # G
+            verdict,          # H
+            views,            # I
+            likes,            # J
+            shares,           # K
+            retention_3s_val, # L
+            avg_watch_time_val # M
         ]
-
+        
+        # Отправка в Google Sheets
         worksheet.append_row(row)
-        logger.info(
-            "Exported hook to sheet: platform=%s, title=%s",
-            platform,
-            title,
-        )
+        logger.info(f"Exported video to sheet: '{video_title}' (Score: {score})")
         return True
 
     except FileNotFoundError as e:
-        logger.warning("Sheet export skipped: %s", e)
+        logger.warning(f"Sheet export skipped (files): {e}")
         return False
     except gspread.WorksheetNotFound:
-        logger.error(
-            "Worksheet '%s' not found in spreadsheet. "
-            "Please create the sheet manually.",
-            GOOGLE_SHEET_WORKSHEET_NAME,
-        )
-        return False
-    except gspread.GSpreadException as e:
-        logger.exception("Google Sheets API error: %s", e)
+        logger.error(f"Worksheet '{GOOGLE_SHEET_WORKSHEET_NAME}' not found.")
         return False
     except Exception as e:
-        logger.exception("Unexpected error during sheet export: %s", e)
+        logger.error(f"Failed to export video to sheet: {e}")
+        # Не роняем бота, просто логируем ошибку
         return False

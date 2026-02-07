@@ -88,13 +88,30 @@ def format_report(data: dict[str, Any]) -> str:
     heuristics = data.get("expert_heuristics") or []
     recommendations = data.get("recommendations") or []
     duration = data.get("video_duration_sec")
+    age_hours = metrics.get("age_hours")
 
     lines: list[str] = []
+
+    # Форматирование возраста видео
+    if age_hours is not None:
+        if age_hours < 1:
+            age_str = "🕒 Fresh"
+        else:
+            age_str = f"🕒 {age_hours:.1f}ч назад"
+    else:
+        age_str = ""
 
     # Заголовок с вердиктом и оценкой
     score_str = f"{score}/100" if isinstance(score, (int, float)) else "—"
     lines.append(f"<b>{verdict}</b> | {score_str}")
-    lines.append(f"📊 {platform}{f' | ~{duration}с' if duration else ''}")
+
+    # Платформа, длительность и возраст
+    header_parts = [f"📊 {platform}"]
+    if duration:
+        header_parts.append(f"~{duration}с")
+    if age_str:
+        header_parts.append(age_str)
+    lines.append(" | ".join(header_parts))
     lines.append("")
 
     # Метрики в одной строке если возможно

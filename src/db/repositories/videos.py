@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -52,10 +53,20 @@ def insert_video(
 
         # Объединяем метрики и rates в одно поле
         full_metrics = {**metrics, **calculated_rates}
-        
+
         # Add hook_type to metrics if present
         if result.get("hook_type"):
             full_metrics["hook_type"] = result.get("hook_type")
+
+        # Calculate video age in hours from posted_at
+        posted_at_str = result.get("posted_at")
+        if posted_at_str:
+            try:
+                posted_at_dt = datetime.strptime(posted_at_str, "%Y-%m-%d %H:%M:%S")
+                age_hours = (datetime.utcnow() - posted_at_dt).total_seconds() / 3600
+                full_metrics["hours_since_post"] = round(age_hours, 1)
+            except (ValueError, TypeError):
+                logger.warning("Failed to parse posted_at: %s", posted_at_str)
 
         # Детальный анализ: tier_1 + tier_2 + heuristics + recommendations
         detailed = {
