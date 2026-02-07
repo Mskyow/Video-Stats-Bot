@@ -8,7 +8,7 @@ import logging
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
 
 from src import config
 from src.bot.handlers import image_router, start_router, stats_router
@@ -30,13 +30,19 @@ def _setup_dispatch(dp: Dispatcher, bot: Bot) -> None:
 async def setup_bot_commands(bot: Bot) -> None:
     """Настройка меню команд бота."""
     commands = [
-        BotCommand(command="start", description="Запуск"),
-        BotCommand(command="help", description="Справка"),
-        BotCommand(command="day_stats", description="Отчет за сегодня (New)"),
-        BotCommand(command="all_stats", description="Общая статистика (New)"),
-        BotCommand(command="stats", description="Мои анализы"),
+        BotCommand(command="start", description="Запуск бота"),
+        BotCommand(command="help", description="Справка по использованию"),
+        BotCommand(command="stats", description="Моя статистика анализов"),
+        BotCommand(command="day_stats", description="Отчет за последние 24 часа"),
+        BotCommand(command="all_stats", description="Общая статистика по всем видео"),
     ]
-    await bot.set_my_commands(commands)
+
+    try:
+        # Устанавливаем команды с явным указанием scope (для всех чатов)
+        await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+        logger.info("Bot commands set successfully: %s", [cmd.command for cmd in commands])
+    except Exception as e:
+        logger.error("Failed to set bot commands: %s", e)
 
 
 async def main() -> None:
