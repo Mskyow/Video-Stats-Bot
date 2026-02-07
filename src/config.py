@@ -45,7 +45,9 @@ WEBHOOK_PATH: str = _get_optional("WEBHOOK_PATH") or "/webhook"
 ADMIN_USER_ID: int | None = int(v) if (v := _get_optional("ADMIN_USER_ID")) else None
 
 # Google Sheets (Service Account для экспорта аналитики хуков)
+# Можно указать либо путь к файлу (локально), либо JSON-строку (Railway)
 GOOGLE_SHEET_CREDENTIALS_PATH: str | None = _get_optional("GOOGLE_SHEET_CREDENTIALS_PATH")
+GOOGLE_CREDENTIALS_JSON: str | None = _get_optional("GOOGLE_CREDENTIALS_JSON")
 GOOGLE_SHEET_ID: str | None = _get_optional("GOOGLE_SHEET_ID")
 # Название листа в таблице (например "Hooks CRM" или "Hook Analytics")
 GOOGLE_SHEET_WORKSHEET_NAME: str = _get_optional("GOOGLE_SHEET_WORKSHEET_NAME") or "Hook Analytics"

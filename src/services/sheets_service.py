@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date
 from pathlib import Path
@@ -17,6 +18,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 from src.config import (
     GOOGLE_SHEET_CREDENTIALS_PATH,
+    GOOGLE_CREDENTIALS_JSON,
     GOOGLE_SHEET_ID,
     GOOGLE_SHEET_WORKSHEET_NAME,
 )
@@ -26,28 +28,48 @@ logger = logging.getLogger(__name__)
 
 def _get_credentials() -> ServiceAccountCredentials:
     """
-    Загружает credentials для Google Sheets из JSON-файла Service Account.
+    Загружает credentials для Google Sheets.
+    
+    Поддерживает два способа:
+    - Из JSON-файла (локально, GOOGLE_SHEET_CREDENTIALS_PATH)
+    - Из переменной окружения (Railway, GOOGLE_CREDENTIALS_JSON)
 
     Returns:
         Готовые к использованию credentials.
     """
-    creds_path = Path(GOOGLE_SHEET_CREDENTIALS_PATH)
-
-    if not creds_path.exists():
-        raise FileNotFoundError(
-            f"Файл credentials не найден: {creds_path}. "
-            "Проверьте GOOGLE_SHEET_CREDENTIALS_PATH в .env"
-        )
-
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",
     ]
 
-    credentials = ServiceAccountCredentials.from_json_keyfile_name(
-        str(creds_path), scope
+    # Приоритет: GOOGLE_CREDENTIALS_JSON (для Railway)
+    if GOOGLE_CREDENTIALS_JSON:
+        try:
+            creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+            credentials = ServiceAccountCredentials.from_json_keyfile_dict(
+                creds_dict, scope
+            )
+            return credentials
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Невалидный JSON в GOOGLE_CREDENTIALS_JSON: {e}")
+
+    # Fallback: GOOGLE_SHEET_CREDENTIALS_PATH (для локальной разработки)
+    if GOOGLE_SHEET_CREDENTIALS_PATH:
+        creds_path = Path(GOOGLE_SHEET_CREDENTIALS_PATH)
+        if not creds_path.exists():
+            raise FileNotFoundError(
+                f"Файл credentials не найден: {creds_path}. "
+                "Проверьте GOOGLE_SHEET_CREDENTIALS_PATH в .env или используйте GOOGLE_CREDENTIALS_JSON"
+            )
+        credentials = ServiceAccountCredentials.from_json_keyfile_name(
+            str(creds_path), scope
+        )
+        return credentials
+
+    raise ValueError(
+        "Не заданы credentials для Google Sheets. "
+        "Укажите GOOGLE_CREDENTIALS_JSON (для Railway) или GOOGLE_SHEET_CREDENTIALS_PATH (для локальной разработки)"
     )
-    return credentials
 
 
 def _get_client() -> gspread.Client:
@@ -93,7 +115,8 @@ def export_hook_to_sheet(video_data: dict[str, Any]) -> bool:
     Returns:
         True, если экспорт выполнен; False — если произошла ошибка.
     """
-    if not GOOGLE_SHEET_CREDENTIALS_PATH or not GOOGLE_SHEET_ID:
+    credentials_configured = GOOGLE_CREDENTIALS_JSON or GOOGLE_SHEET_CREDENTIALS_PATH
+    if not credentials_configured or not GOOGLE_SHEET_ID:
         logger.debug("Google Sheets not configured; skip export")
         return False
     try:
