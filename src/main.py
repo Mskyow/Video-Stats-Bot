@@ -78,10 +78,13 @@ async def main() -> None:
             # Logic similar to /day_stats
             supabase = get_client(config.SUPABASE_URL, config.SUPABASE_KEY)
             
-            now = datetime.now(dt_timezone.utc)
-            yesterday = now - timedelta(hours=24)
+            now_utc = datetime.now(dt_timezone.utc)
+            minsk_offset = timedelta(hours=3)
+            now_minsk = now_utc + minsk_offset
+
+            yesterday = now_utc - timedelta(hours=24)
             start_date = yesterday.isoformat()
-            end_date = now.isoformat()
+            end_date = now_utc.isoformat()
             
             videos = get_videos_by_date_range(supabase, start_date, end_date)
             
@@ -104,7 +107,7 @@ async def main() -> None:
                     plat = "YouTube Shorts"
                 grouped.setdefault(plat, []).append(v)
 
-            lines = [f"📊 Daily Report for {now.strftime('%d.%m')}"]
+            lines = [f"📊 Daily Report for {now_minsk.strftime('%d.%m')} (Minsk Time)"]
 
             for plat, v_list in grouped.items():
                 lines.append(f"\n📱 <b>{plat}</b>")
