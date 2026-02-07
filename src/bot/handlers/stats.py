@@ -34,11 +34,26 @@ async def cmd_day_stats(message: Message, supabase_client) -> None:
     logger.info("User %s requested /day_stats", user_id)
 
     # Calculate date range for "today" or last 24h
-    # Using last 24h for broader coverage or start of day?
-    # Requirement: "Fetch videos for the last 24h"
+    # Using last 24h for broader coverage
+    # Minsk time is UTC+3
     now = datetime.utcnow()
-    yesterday = now - timedelta(hours=24)
+    # Adjusting "today" concept to Minsk time if we wanted day boundaries,
+    # but "last 24h" is relative and simpler.
+    # If the user means "Show me stats for the day in Minsk time", we should adjust.
+    # Current implementation: Last 24 hours from NOW (UTC).
+    # To align with user expectation "standard time is Minsk (GMT+3)":
+    # If they want "Today's stats" meaning "since 00:00 Minsk time", we should do that.
+    # However, /day_stats usually implies "daily report", often last 24h rolling or previous calendar day.
+    # Let's keep "last 24h" logic but label it clearly, or shift to Minsk timezone for display.
     
+    # Let's shift the display date to Minsk time (+3 hours)
+    minsk_offset = timedelta(hours=3)
+    now_minsk = now + minsk_offset
+    
+    # 24h window remains 24h window regardless of timezone, but let's ensure we capture 
+    # what they likely mean by "day stats" - typically the last full cycle.
+    
+    yesterday = now - timedelta(hours=24)
     start_date = yesterday.isoformat()
     end_date = now.isoformat()
 
@@ -52,7 +67,6 @@ async def cmd_day_stats(message: Message, supabase_client) -> None:
     grouped: dict[str, list] = {}
     for v in videos:
         plat = (v.get("platform") or "Other").capitalize()
-        # Normalize platform names
         if "tiktok" in plat.lower():
             plat = "TikTok"
         elif "reels" in plat.lower():
@@ -62,8 +76,8 @@ async def cmd_day_stats(message: Message, supabase_client) -> None:
         
         grouped.setdefault(plat, []).append(v)
 
-    # Format output
-    lines = [f"📊 Report for {now.strftime('%d.%m')}"]
+    # Format output with Minsk date
+    lines = [f"📊 Report for {now_minsk.strftime('%d.%m')} (Minsk Time)"]
 
     for plat, v_list in grouped.items():
         lines.append(f"\n📱 <b>{plat}</b>")

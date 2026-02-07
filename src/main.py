@@ -146,14 +146,14 @@ async def main() -> None:
             except Exception as e:
                 logger.exception("Failed to send daily report: %s", e)
 
-        # Schedule job at 12:00 UTC
+        # Schedule job at 12:00 UTC (15:00 Minsk/Moscow time)
         scheduler.add_job(
             send_daily_report_job,
             CronTrigger(hour=12, minute=0, timezone="UTC"),
             kwargs={"bot_instance": bot}
         )
         scheduler.start()
-        logger.info("Scheduler started. Daily report at 12:00 UTC.")
+        logger.info("Scheduler started. Daily report at 12:00 UTC (15:00 Minsk).")
 
         await dp.start_polling(bot)
 
