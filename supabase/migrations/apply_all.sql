@@ -58,6 +58,7 @@ CREATE INDEX IF NOT EXISTS idx_videos_user_id ON videos(user_id);
 CREATE INDEX IF NOT EXISTS idx_videos_created_at ON videos(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_videos_score ON videos(score DESC);
 CREATE INDEX IF NOT EXISTS idx_videos_verdict ON videos(verdict);
+CREATE INDEX IF NOT EXISTS idx_videos_hook_score ON videos(hook_score);
 
 -- ============================================================
 -- 3. VIEW: удобная сводка пользователей для админа
@@ -107,7 +108,31 @@ ORDER BY v.created_at DESC;
 COMMENT ON VIEW user_video_history IS 'История анализов видео с основными метриками';
 
 -- ============================================================
--- 5. COMMENTS (описания колонок)
+-- 5. VIEW: статистика по хукам
+-- ============================================================
+CREATE OR REPLACE VIEW hook_statistics AS
+SELECT
+    COALESCE(hook_score, 'unknown') AS hook_score,
+    COUNT(*) AS count,
+    ROUND(AVG(score)::numeric, 1) AS avg_score
+FROM videos
+GROUP BY COALESCE(hook_score, 'unknown')
+ORDER BY count DESC;
+
+CREATE OR REPLACE VIEW user_hook_statistics AS
+SELECT
+    v.user_id,
+    u.username,
+    COALESCE(v.hook_score, 'unknown') AS hook_score,
+    COUNT(*) AS count,
+    ROUND(AVG(v.score)::numeric, 1) AS avg_score
+FROM videos v
+JOIN users u ON u.id = v.user_id
+GROUP BY v.user_id, u.username, COALESCE(v.hook_score, 'unknown')
+ORDER BY v.user_id, count DESC;
+
+-- ============================================================
+-- 6. COMMENTS (описания колонок)
 -- ============================================================
 COMMENT ON TABLE users IS 'Пользователи Telegram-бота с approval flow';
 COMMENT ON TABLE videos IS 'Результаты анализа скриншотов видео (метрики + score + вердикт + AI)';

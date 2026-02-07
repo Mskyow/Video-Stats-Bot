@@ -69,6 +69,7 @@ def insert_video(
         payload: dict[str, Any] = {
             "user_id": user_id,
             "platform": result.get("platform"),
+            "title": result.get("title"),
             "metrics": full_metrics,
             "score": float(result.get("score") or 0),
             "analysis": result.get("analysis"),
@@ -152,12 +153,64 @@ def get_user_stats_summary(
             p = v.get("platform") or "unknown"
             platforms[p] = platforms.get(p, 0) + 1
 
+        hook_stats: dict[str, int] = {}
+        for v in videos:
+            h = v.get("hook_score") or "unknown"
+            hook_stats[h] = hook_stats.get(h, 0) + 1
+
         return {
             "total": total,
             "avg_score": round(avg_score, 1),
             "verdicts": verdicts,
             "platforms": platforms,
+            "hook_stats": hook_stats,
         }
     except Exception as e:
         logger.exception("get_user_stats_summary failed: %s", e)
+        return {}
+
+
+def get_hook_statistics(
+    client: Client | None,
+    user_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    Возвращает накопленную статистику по хукам: количество записей по hook_score.
+
+    Если user_id задан — только по этому пользователю; иначе по всей базе (глобально).
+    Удобно для отчётов и для накопления данных в единую базу знаний по хукам.
+    """
+    if client is None:
+        return {}
+    try:
+        query = (
+            client.table("videos")
+            .select("hook_score, score")
+            .not_.is_("hook_score", "null")
+        )
+        if user_id is not None:
+            query = query.eq("user_id", user_id)
+        resp = query.execute()
+        rows = resp.data or []
+
+        hook_counts: dict[str, int] = {}
+        scores_by_hook: dict[str, list[float]] = {}
+        for row in rows:
+            h = row.get("hook_score") or "unknown"
+            hook_counts[h] = hook_counts.get(h, 0) + 1
+            sc = row.get("score")
+            if sc is not None:
+                scores_by_hook.setdefault(h, []).append(float(sc))
+
+        avg_by_hook: dict[str, float] = {}
+        for h, vals in scores_by_hook.items():
+            avg_by_hook[h] = round(sum(vals) / len(vals), 1) if vals else 0
+
+        return {
+            "total_with_hook": sum(hook_counts.values()),
+            "hook_counts": hook_counts,
+            "avg_score_by_hook": avg_by_hook,
+        }
+    except Exception as e:
+        logger.exception("get_hook_statistics failed: %s", e)
         return {}

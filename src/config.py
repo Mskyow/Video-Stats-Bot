@@ -46,6 +46,12 @@ ALLOW_ALL_USERS: bool = (os.getenv("ALLOW_ALL_USERS", "").strip().lower() in ("1
 # Telegram ID администратора (для уведомлений о новых пользователях)
 ADMIN_USER_ID: int | None = int(v) if (v := _get_optional("ADMIN_USER_ID")) else None
 
+# Google Sheets (Service Account для экспорта аналитики хуков)
+GOOGLE_SHEET_CREDENTIALS_PATH: str | None = _get_optional("GOOGLE_SHEET_CREDENTIALS_PATH")
+GOOGLE_SHEET_ID: str | None = _get_optional("GOOGLE_SHEET_ID")
+# Название листа в таблице (например "Hooks CRM" или "Hook Analytics")
+GOOGLE_SHEET_WORKSHEET_NAME: str = _get_optional("GOOGLE_SHEET_WORKSHEET_NAME") or "Hook Analytics"
+
 
 def setup_logging() -> None:
     """Настраивает уровень логирования по LOG_LEVEL."""

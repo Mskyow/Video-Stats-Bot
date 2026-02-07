@@ -1,5 +1,7 @@
 .env
 .venv
+credentials.json
+credentials-gsheet.json
 venv
 __pycache__
 *.pyc

@@ -12,3 +12,9 @@ pydantic>=2.9,<3
 python-dotenv>=1.0,<2
 # Для webhook (опционально)
 aiohttp>=3.9,<4
+
+# Google Sheets (для ежедневных отчётов)
+gspread>=5.0,<6
+
+# Планировщик задач (ежедневные отчёты)
+apscheduler>=3.10,<4

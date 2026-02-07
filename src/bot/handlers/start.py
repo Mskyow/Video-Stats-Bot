@@ -84,6 +84,7 @@ async def cmd_stats(message: Message) -> None:
     avg = stats.get("avg_score", 0)
     verdicts = stats.get("verdicts", {})
     platforms = stats.get("platforms", {})
+    hook_stats = stats.get("hook_stats", {})
 
     lines = [
         f"📊 <b>Твоя статистика</b>",
@@ -92,6 +93,15 @@ async def cmd_stats(message: Message) -> None:
         f"📈 Средний Score: <b>{avg}/100</b>",
         "",
     ]
+
+    if hook_stats:
+        lines.append("<b>📌 Hook (по записям):</b>")
+        for h, count in sorted(hook_stats.items(), key=lambda x: -x[1]):
+            if h != "unknown":
+                lines.append(f"  {h}: {count}")
+        if hook_stats.get("unknown"):
+            lines.append(f"  без оценки: {hook_stats['unknown']}")
+        lines.append("")
 
     if verdicts:
         lines.append("<b>Вердикты:</b>")

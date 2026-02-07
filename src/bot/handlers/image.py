@@ -10,9 +10,11 @@ from aiogram import Bot, F, Router
 from aiogram.types import Message
 
 from src.ai.openrouter_service import analyze_screenshot
+from src.config import GOOGLE_SHEET_ID
 from src.db.repositories.videos import insert_video
 from src.db.supabase_client import get_supabase
 from src.formatters.report import format_report
+from src.services.sheets_service import export_hook_to_sheet
 
 router = Router(name="image")
 logger = logging.getLogger(__name__)
@@ -62,6 +64,13 @@ async def handle_photo(message: Message, bot: Bot) -> None:
             result,
             raw_response,
         )
+
+    # Экспорт хука в Google Sheet (если настроено)
+    if GOOGLE_SHEET_ID:
+        try:
+            await asyncio.to_thread(export_hook_to_sheet, result)
+        except Exception as e:
+            logger.warning("Sheet export failed (non-blocking): %s", e)
 
     # Отправляем отчёт (заменяем сообщение "анализирую")
     try:
