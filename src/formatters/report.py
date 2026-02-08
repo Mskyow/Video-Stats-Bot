@@ -191,8 +191,12 @@ def format_report(data: dict[str, Any]) -> str:
             lines.append(f"  • {h}")
         lines.append("")
 
-    # Анализ
-    lines.append(f"<b>Вывод:</b> {analysis}")
+    # Анализ — оборачиваем в blockquote для визуального выделения
+    if analysis and analysis != "—":
+        lines.append("<b>Вывод:</b>")
+        lines.append(f"<blockquote>{analysis}</blockquote>")
+    else:
+        lines.append("<b>Вывод:</b> —")
 
     # Рекомендации
     if recommendations:

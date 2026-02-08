@@ -1,18 +1,19 @@
 """
-Анализ скриншотов с метриками видео через OpenRouter (Gemini 3 Flash, thinking medium).
+Анализ скриншотов с метриками видео через OpenRouter (Gemini 3 Flash Preview, thinking medium).
 
 Используется полный системный промпт с бенчмарками:
 - Tier 1 (Gatekeeper): 3s retention, completion rate, avg watch time
 - Tier 2 (Growth Engine): share rate, save rate, comment rate
 - Expert Heuristics, Decision Tree
 
-API: OpenRouter (OpenAI-compatible), модель google/gemini-3-flash-preview, reasoning.effort: medium.
+API: OpenRouter (OpenAI-compatible), модель google/gemini-3-flash-preview, reasoning.effort: medium (thinkingLevel: medium).
 """
 from __future__ import annotations
 
 import base64
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Any
@@ -140,10 +141,18 @@ Determines "Hit" vs "Norm".
 - Image 1: Overview Metrics (engagement numbers, views, etc.)
 - Image 2: Retention Graph (audience retention visualization)
 - Combine data from BOTH images to build the complete analysis.
-- **OCR Date:** Extract the posting date and convert it strictly to 'YYYY-MM-DD HH:MM:SS' format (UTC). If the screenshot says '2 days ago', calculate the date based on the Current Reference Time. Field: `posted_at`.
+- **OCR Date (CRITICAL):** Look for grey text usually below the username or at the bottom.
+  - "2 days ago" -> Calculate exact date based on Current Reference Time.
+  - "12-25" -> Assume current year (or previous if future).
+  - Format: YYYY-MM-DD HH:MM:SS.
 - **OCR Title:** Extract the visible video headline/text. Field: `video_title`.
 - **Hook Type:** Analyze pacing/length. Field: `hook_type` ('Short', 'Medium', 'Long').
 - **Raw Metrics:** Extract all visible numbers (views, likes, shares, retention_3s, avg_watch_time) as raw integers/floats.
+- **Retention (CRITICAL):**
+  - Look specifically for "Retention rate", "Stopped watching", or the graph's start value.
+  - **TikTok:** Search for text "Most viewers stopped watching at..." and extract the percentage next to it.
+  - **Reels:** Search for "Average Watch Time" and the retention graph. The graph often shows the retention percentage. If there is a graph but no explicit number, visually estimate the starting value and mark as "estimated".
+  - If "Not Found", double-check the second image (Graph image).
 
 ## OUTPUT FORMAT
 Respond ONLY with valid JSON (no markdown fences, no extra text). Use this exact structure:
@@ -212,8 +221,17 @@ Follow the Decision Tree to arrive at the final verdict.
 Rules:
 - Identify the platform from the UI (TikTok / YouTube Shorts / Reels) - detect automatically from icons and colors.
 - Extract the visible text/headline from the video screenshot as 'video_title'.
-- **OCR Date:** Extract the posting date and convert it strictly to 'YYYY-MM-DD HH:MM:SS' format (UTC). If the screenshot says '2 days ago', calculate the date based on the Current Reference Time provided above.
+- **OCR Date (CRITICAL - STRICT):** Look for grey text usually below the username or at the bottom.
+  - "2 days ago", "Yesterday", "Just now" -> MUST calculate exact date using Current Reference Time.
+  - "12-25", "Dec 25" -> Assume current year (or previous if future).
+  - Format: YYYY-MM-DD HH:MM:SS (UTC).
+  - Field: `posted_at`.
 - **Hook Type:** Determine 'hook_type' (Short/Medium/Long) based on pacing or duration.
+- **Retention (CRITICAL):**
+  - **TikTok:** Look for text "Most viewers stopped watching at..." and extract the percentage (e.g., "64% of viewers").
+  - **Reels:** Look for "Average Watch Time" and the retention graph. If the graph shows the starting value, extract it. If no explicit number, visually estimate from the graph's start point and mark as "estimated".
+  - If "Not Found", double-check the second image (Graph image).
+- **Engagement Rate Calculation:** ALWAYS calculate `aggregated_er = (likes + comments + shares + saves) / views * 100`.
 - Read retention and engagement graphs if visible.
 - Calculate engagement rates from raw numbers (share_rate = shares/views*100, etc.).
 - Apply expert heuristics if conditions match.
@@ -304,7 +322,7 @@ def analyze_screenshot(
     mime_type: str = "image/jpeg",
 ) -> tuple[dict[str, Any] | None, str | None]:
     """
-    Отправляет скриншоты в OpenRouter (Gemini 3 Flash, thinking medium).
+    Отправляет скриншоты в OpenRouter (Gemini 3 Flash Preview, thinking medium).
 
     Args:
         images_list: Список байтов изображений (2 изображения: [Overview Metrics, Retention Graph]).
@@ -351,33 +369,70 @@ def analyze_screenshot(
         "HTTP-Referer": "https://github.com/video-stats-bot",
     }
 
-    try:
-        resp = requests.post(
-            OPENROUTER_URL,
-            json=payload,
-            headers=headers,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    max_retries = 3
+    retry_delay = 2
+    last_exception = None
 
-        choices = data.get("choices") or []
-        if not choices:
-            logger.warning("OpenRouter returned no choices")
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.post(
+                OPENROUTER_URL,
+                json=payload,
+                headers=headers,
+                timeout=120,
+            )
+
+            # Check for server errors that warrant a retry
+            if resp.status_code in (500, 502, 503, 504):
+                logger.warning(
+                    "OpenRouter returned status %s on attempt %d/%d",
+                    resp.status_code, attempt, max_retries
+                )
+                if attempt < max_retries:
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    logger.error("OpenRouter final failure after %d attempts (status %s)", max_retries, resp.status_code)
+                    return None, None
+
+            resp.raise_for_status()
+            data = resp.json()
+
+            # Check for empty JSON response
+            if data is None:
+                logger.warning("OpenRouter returned empty JSON on attempt %d/%d", attempt, max_retries)
+                if attempt < max_retries:
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    logger.error("OpenRouter final failure after %d attempts (empty JSON)", max_retries)
+                    return None, None
+
+            choices = data.get("choices") or []
+            if not choices:
+                logger.warning("OpenRouter returned no choices")
+                return None, None
+
+            msg = choices[0].get("message") or {}
+            raw_text = (msg.get("content") or "").strip()
+            if not raw_text:
+                logger.warning("OpenRouter empty content in message")
+                return None, None
+
+            parsed = _parse_response(raw_text)
+            return parsed, raw_text
+
+        except requests.RequestException as e:
+            last_exception = e
+            logger.warning(
+                "OpenRouter request failed on attempt %d/%d: %s",
+                attempt, max_retries, e
+            )
+            if attempt < max_retries:
+                time.sleep(retry_delay)
+            else:
+                logger.exception("OpenRouter request failed after all %d retries: %s", max_retries, e)
+                return None, None
+        except (KeyError, TypeError, ValueError) as e:
+            logger.exception("OpenRouter response parse failed: %s", e)
             return None, None
-
-        msg = choices[0].get("message") or {}
-        raw_text = (msg.get("content") or "").strip()
-        if not raw_text:
-            logger.warning("OpenRouter empty content in message")
-            return None, None
-
-        parsed = _parse_response(raw_text)
-        return parsed, raw_text
-
-    except requests.RequestException as e:
-        logger.exception("OpenRouter request failed: %s", e)
-        return None, None
-    except (KeyError, TypeError, ValueError) as e:
-        logger.exception("OpenRouter response parse failed: %s", e)
-        return None, None

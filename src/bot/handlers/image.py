@@ -12,7 +12,7 @@ from typing import Any
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src.ai.openrouter_service import analyze_screenshot
 from src.bot.states import UploadMode
@@ -38,6 +38,7 @@ class VideoProcessingResult:
     ai_result: dict[str, Any] | None = None
     raw_response: str | None = None
     is_orphan: bool = False  # Если не хватило пары (нечетное кол-во)
+    is_duplicate: bool = False  # Если видео дубликат (данные не изменились)
 
 
 @router.message(F.photo)
@@ -113,10 +114,54 @@ async def handle_photo(message: Message, bot: Bot, state: FSMContext, album: lis
         # Для одиночного фото тоже нужен фидбек
         processing_msg = await message.answer("⏳ Анализирую...")
 
+    # === Прогресс-бар: переменные и настройка ===
+    total_videos = len(pairs)
+    completed_count = 0
+    last_update_time = 0.0
+    update_lock = asyncio.Lock()
+
+    async def update_progress():
+        """Обновляет прогресс-бар с тротлингом (макс 1 раз в 1.5 сек)."""
+        nonlocal last_update_time
+
+        async with update_lock:
+            percent = int((completed_count / total_videos) * 100)
+
+            # Тротлинг: обновляем только если прошло > 1.5 сек ИЛИ это 100%
+            import time
+            current_time = time.time()
+            if percent < 100 and (current_time - last_update_time) <= 1.5:
+                return
+
+            # Генерируем полоску ▰▰▰▰▱▱▱▱▱▱
+            filled = percent // 10
+            bar = "▰" * filled + "▱" * (10 - filled)
+
+            text = f"⏳ Анализ: {bar} {percent}%"
+
+            try:
+                await processing_msg.edit_text(text)
+                last_update_time = current_time
+            except Exception:
+                # Игнорируем ошибки Telegram (например, "message not modified")
+                pass
+
+    async def process_wrapper(idx: int, m1: Message, m2: Message, bot: Bot) -> VideoProcessingResult:
+        """Обертка: выполняет задачу и обновляет прогресс."""
+        nonlocal completed_count
+
+        result = await process_single_video(idx, m1, m2, bot)
+
+        async with update_lock:
+            completed_count += 1
+
+        await update_progress()
+        return result
+
     # 2. Параллельная обработка (The Engine)
     tasks = []
     for idx, (msg1, msg2) in enumerate(pairs, start=1):
-        tasks.append(process_single_video(idx, msg1, msg2, bot))
+        tasks.append(process_wrapper(idx, msg1, msg2, bot))
 
     # Добавляем "орфанные" (непарные) как ошибки
     results: list[VideoProcessingResult] = []
@@ -151,7 +196,8 @@ async def handle_photo(message: Message, bot: Bot, state: FSMContext, album: lis
     # 3. Сохранение данных (Fault Tolerance: сохраняем то, что успешно)
     saved_count = 0
     failed_count = 0
-    
+    duplicate_count = 0
+
     user_id = message.from_user.id if message.from_user else 0
     supabase = get_supabase()
 
@@ -160,38 +206,54 @@ async def handle_photo(message: Message, bot: Bot, state: FSMContext, album: lis
             try:
                 # Сохранение в Supabase
                 if supabase and user_id:
-                    await asyncio.to_thread(
+                    db_result = await asyncio.to_thread(
                         insert_video,
                         supabase,
                         user_id,
                         res.ai_result,
                         res.raw_response,
                     )
-                
-                # Экспорт в Google Sheets (если Score > Threshold, но тут сохраняем все успешные)
-                # Логика фильтрации может быть внутри export_hook_to_sheet или здесь.
-                # По ТЗ: "Если score > threshold, save to Google Sheets" - проверим score.
-                # Но обычно export_hook_to_sheet сама решает или сохраняем всё. 
-                # Предположим, сохраняем всё успешное, а сервис сам решит.
-                if GOOGLE_SHEET_ID:
-                    await asyncio.to_thread(export_video_to_sheet, res.ai_result)
-                
-                saved_count += 1
+
+                    # Проверяем, является ли видео дубликатом
+                    if db_result and db_result.get("skipped") and db_result.get("duplicate"):
+                        res.is_duplicate = True
+                        duplicate_count += 1
+                        logger.info(f"Video {res.index} is duplicate, skipping Google Sheets export")
+                        continue
+
+                    # Если дошли сюда, видео сохранено (NEW или UPDATE)
+                    saved_count += 1
+
+                    # Экспорт в Google Sheets (не делаем для дубликатов)
+                    if GOOGLE_SHEET_ID:
+                        await asyncio.to_thread(export_video_to_sheet, res.ai_result)
+                else:
+                    # Если нет supabase, считаем что сохранение не удалось
+                    failed_count += 1
             except Exception as e:
                 logger.error(f"Failed to save video {res.index}: {e}")
-                # Не помечаем как failed для юзера, так как анализ прошел, проблема на бэкенде
-                # Можно добавить пометку в отчет, но пока просто логируем.
+                failed_count += 1
         else:
             failed_count += 1
 
     # 4. Формирование отчета (UX)
-    report_text = build_summary_report(results, saved_count, failed_count, len(messages))
+    report_text = build_summary_report(results, saved_count, failed_count, duplicate_count, len(messages))
 
-    # Отправка отчета
+    # Клавиатура с ссылкой на Google Sheet
+    keyboard = None
+    if GOOGLE_SHEET_ID:
+        sheet_url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}"
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="📊 Открыть таблицу", url=sheet_url)]
+            ]
+        )
+
+    # Отправка отчета с кнопкой
     try:
-        await processing_msg.edit_text(report_text)
+        await processing_msg.edit_text(report_text, reply_markup=keyboard)
     except Exception:
-        await message.answer(report_text)
+        await message.answer(report_text, reply_markup=keyboard)
 
 
 async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bot) -> VideoProcessingResult:
@@ -273,13 +335,13 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
         )
 
 
-def build_summary_report(results: list[VideoProcessingResult], saved: int, failed: int, total_images: int) -> str:
+def build_summary_report(results: list[VideoProcessingResult], saved: int, failed: int, duplicates: int, total_images: int) -> str:
     """Формирует итоговое сообщение для пользователя."""
 
     total = len(results)
     lines = [
         f"✅ Готово: {total} видео",
-        f"💾 Сохранено: {saved} | ❌ Ошибок: {failed}",
+        f"💾 Сохранено: {saved} | ♻️ Дубликатов: {duplicates} | ❌ Ошибок: {failed}",
         ""
     ]
 
@@ -297,6 +359,11 @@ def build_summary_report(results: list[VideoProcessingResult], saved: int, faile
                 icon = "🟡"
 
             line = f"{icon} {res.index}. [{platform}] {title} — {res.score}/100"
+            
+            # Добавляем пометку для дубликатов
+            if res.is_duplicate:
+                line += " ♻️ Данные не изменились"
+            
             lines.append(line)
         else:
             error_msg = res.error_message or "Ошибка"

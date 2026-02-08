@@ -101,11 +101,11 @@ def _get_worksheet(client: gspread.Client) -> gspread.Worksheet:
 def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
     """
     Экспортирует полные данные видео в Google Sheet.
-    
+
     Колонки (Strict Order):
     - Col A: Processed At (Current Timestamp)
     - Col B: Posted At (Normalized date from AI)
-    - Col C: Age (Hours) (Video age from metrics)
+    - Col C: Age (Hours) (Calculated from posted_at)
     - Col D: Platform (TikTok/Reels)
     - Col E: Video Title (OCR)
     - Col F: Hook Type (Short/Medium/Long)
@@ -116,10 +116,13 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
     - Col K: Shares (Raw Int)
     - Col L: Retention 3s (Raw %)
     - Col M: Avg Watch Time (Raw)
+    - Col N: Engagement Rate (%)
+
+    NOTE: Добавлена колонка N (Engagement Rate). Обновите заголовки в Google Sheets вручную.
 
     Args:
         video_data: Словарь с результатами анализа AI.
-    
+
     Returns:
         True, если экспорт выполнен; False — если произошла ошибка.
     """
@@ -136,16 +139,27 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
         
         # A: Processed At
         processed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+        processed_at_dt = datetime.now()
+
         # B: Posted At (normalized date from AI)
         posted_at = video_data.get("posted_at")
         if not posted_at:
             posted_at = "Not Found"
 
-        # C: Age (Hours)
+        # C: Age (Hours) - расчет из posted_at
+        age_hours_val = "Not Found"
+        if posted_at and posted_at != "Not Found":
+            try:
+                # Парсим posted_at (формат YYYY-MM-DD...)
+                if len(posted_at) >= 10:
+                    posted_at_dt = datetime.strptime(posted_at[:10], "%Y-%m-%d")
+                    delta = processed_at_dt - posted_at_dt
+                    age_hours = delta.total_seconds() / 3600
+                    age_hours_val = f"{age_hours:.1f}"
+            except (ValueError, TypeError):
+                age_hours_val = "Not Found"
+
         metrics = video_data.get("metrics") or {}
-        age_hours = metrics.get("age_hours")
-        age_hours_val = f"{age_hours:.1f}" if age_hours is not None else "Not Found"
 
         # D: Platform
         platform = video_data.get("platform")
@@ -204,21 +218,41 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
         avg_watch_time = metrics.get("avg_watch_time_pct")
         avg_watch_time_val = f"{avg_watch_time}%" if avg_watch_time is not None else "Not Found"
 
+        # N: Engagement Rate (%)
+        er_val = "Not Found"
+        calculated_rates = video_data.get("calculated_rates") or {}
+        aggregated_er = calculated_rates.get("aggregated_er")
+
+        if aggregated_er is not None:
+            er_val = f"{aggregated_er:.1f}%"
+        else:
+            # Считаем вручную: (likes + shares + comments + saves) / views
+            likes_num = metrics.get("likes") if metrics.get("likes") is not None else 0
+            shares_num = metrics.get("shares") if metrics.get("shares") is not None else 0
+            comments_num = metrics.get("comments") if metrics.get("comments") is not None else 0
+            saves_num = metrics.get("saves") if metrics.get("saves") is not None else 0
+            views_num = metrics.get("views") if metrics.get("views") is not None else 0
+
+            if views_num > 0:
+                er = (likes_num + shares_num + comments_num + saves_num) / views_num * 100
+                er_val = f"{er:.1f}%"
+
         # Формируем строку
         row = [
-            processed_at,     # A
-            posted_at,        # B
-            age_hours_val,    # C
-            platform,         # D
-            video_title,      # E
-            hook_type,        # F
-            score,            # G
-            verdict,          # H
-            views,            # I
-            likes,            # J
-            shares,           # K
-            retention_3s_val, # L
-            avg_watch_time_val # M
+            processed_at,       # A
+            posted_at,          # B
+            age_hours_val,      # C
+            platform,           # D
+            video_title,        # E
+            hook_type,          # F
+            score,              # G
+            verdict,            # H
+            views,              # I
+            likes,              # J
+            shares,             # K
+            retention_3s_val,   # L
+            avg_watch_time_val, # M
+            er_val              # N
         ]
         
         # Отправка в Google Sheets

@@ -14,12 +14,130 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from supabase import Client
 
 logger = logging.getLogger(__name__)
+
+
+class VideoStatus(Enum):
+    """Статус проверки видео на дубликаты."""
+    NEW = "new"
+    UPDATE = "update"
+    DUPLICATE = "duplicate"
+
+
+def normalize_title(title: str | None) -> str:
+    """Нормализует название для сравнения (убирает пробелы, приводит к нижнему регистру)."""
+    if not title:
+        return ""
+    return title.lower().replace(" ", "").replace("\t", "").replace("\n", "")
+
+
+def check_video_status(
+    client: Client | None,
+    user_id: int,
+    title: str | None,
+    posted_at: str | None,
+    new_views: int | float | None,
+) -> tuple[VideoStatus, dict[str, Any] | None]:
+    """
+    Проверяет статус видео: новое, обновление или дубликат.
+
+    Args:
+        client: Supabase client
+        user_id: Telegram user ID
+        title: Название видео
+        posted_at: Дата публикации (строка)
+        new_views: Количество просмотров в новых данных
+
+    Returns:
+        Кортеж (статус, старая запись или None)
+        - NEW: видео не найдено
+        - UPDATE: видео найдено, просмотры выросли на 2%+
+        - DUPLICATE: видео найдено, просмотры не изменились
+    """
+    if client is None:
+        return VideoStatus.NEW, None
+
+    if not title or not posted_at:
+        logger.debug("Missing title or posted_at, treating as NEW")
+        return VideoStatus.NEW, None
+
+    try:
+        # Ищем последнее видео этого пользователя с таким posted_at
+        resp = (
+            client.table("videos")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(100)
+            .execute()
+        )
+
+        videos = resp.data or []
+        normalized_new_title = normalize_title(title)
+
+        # Ищем видео с совпадающим posted_at и названием
+        matching_video = None
+        for video in videos:
+            video_metrics = video.get("metrics") or {}
+            # posted_at может быть в метриках или как поле top-level
+            video_posted_at = video_metrics.get("posted_at") or video.get("posted_at")
+            video_title = video.get("title")
+
+            if video_posted_at == posted_at:
+                normalized_old_title = normalize_title(video_title)
+                if normalized_old_title == normalized_new_title:
+                    matching_video = video
+                    break
+
+        if not matching_video:
+            return VideoStatus.NEW, None
+
+        # Проверяем изменение просмотров
+        metrics = matching_video.get("metrics") or {}
+        old_views = metrics.get("views")
+
+        if old_views is None or new_views is None:
+            # Нет данных для сравнения, считаем дубликатом
+            return VideoStatus.DUPLICATE, matching_video
+
+        try:
+            old_views_float = float(old_views)
+            new_views_float = float(new_views)
+        except (ValueError, TypeError):
+            return VideoStatus.DUPLICATE, matching_video
+
+        # Проверяем рост на 2% и более
+        if old_views_float > 0:
+            growth_percent = ((new_views_float - old_views_float) / old_views_float) * 100
+        else:
+            growth_percent = 100 if new_views_float > 0 else 0
+
+        if growth_percent >= 2:
+            logger.info(
+                "Video UPDATE detected: views %s -> %s (+%.1f%%)",
+                old_views_float,
+                new_views_float,
+                growth_percent,
+            )
+            return VideoStatus.UPDATE, matching_video
+        else:
+            logger.debug(
+                "Video DUPLICATE detected: views %s -> %s (%.1f%% change)",
+                old_views_float,
+                new_views_float,
+                growth_percent,
+            )
+            return VideoStatus.DUPLICATE, matching_video
+
+    except Exception as e:
+        logger.exception("check_video_status failed: %s", e)
+        return VideoStatus.NEW, None
 
 
 def insert_video(
@@ -30,6 +148,11 @@ def insert_video(
 ) -> dict[str, Any] | None:
     """
     Вставляет полный результат анализа в таблицу videos.
+    
+    Реализует Smart Deduplication:
+    - Проверяет, есть ли уже такое видео (по user_id + title + posted_at)
+    - Если просмотры выросли на 2%+ → сохраняет новый снимок
+    - Если просмотры не изменились → возвращает маркер дубликата
 
     Args:
         client: Supabase client
@@ -38,11 +161,39 @@ def insert_video(
         raw_ai_response: сырой текст ответа (для дебага)
 
     Returns:
-        Вставленная строка или None.
+        Вставленная строка, None (если ошибка), или объект с флагом skipped=True для дубликатов.
     """
     if client is None:
         logger.warning("Supabase client not initialized; skip insert_video")
         return None
+
+    # Извлекаем данные для проверки дубликатов
+    metrics = result.get("metrics") or {}
+    title = result.get("title")
+    posted_at = result.get("posted_at")
+    new_views = metrics.get("views")
+
+    # Проверяем статус видео
+    status, existing_video = check_video_status(
+        client, user_id, title, posted_at, new_views
+    )
+
+    if status == VideoStatus.DUPLICATE:
+        logger.info(
+            "Skipping duplicate video for user %s: '%s' at %s",
+            user_id,
+            title,
+            posted_at,
+        )
+        return {"skipped": True, "duplicate": True, "existing_video": existing_video}
+
+    if status == VideoStatus.UPDATE:
+        logger.info(
+            "Saving update for video user %s: '%s' at %s (views changed)",
+            user_id,
+            title,
+            posted_at,
+        )
 
     try:
         # Извлекаем данные из результата AI
