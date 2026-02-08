@@ -9,6 +9,8 @@ from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 
+from src import config
+from src.db.repositories.users import get_or_create_user, is_user_authorized, authorize_user
 from src.db.repositories.videos import get_user_stats_summary
 from src.db.supabase_client import get_supabase
 
@@ -50,7 +52,48 @@ HELP_TEXT = (
 
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
-    await message.answer(START_TEXT)
+    """Обработка /start с опциональным кодовым словом."""
+    user = message.from_user
+    if not user:
+        await message.answer("Не удалось определить пользователя.")
+        return
+
+    supabase = get_supabase()
+    user_data = get_or_create_user(supabase, user.id, user.username)
+
+    # Получаем текст после команды (кодовое слово)
+    args = message.text.split(maxsplit=1) if message.text else []
+    provided_code = args[1].strip() if len(args) > 1 else None
+
+    # Проверяем, авторизован ли уже пользователь
+    if is_user_authorized(supabase, user.id):
+        await message.answer(START_TEXT)
+        return
+
+    # Проверяем кодовое слово
+    if config.AUTH_SECRET and provided_code == config.AUTH_SECRET:
+        if authorize_user(supabase, user.id):
+            await message.answer(
+                "✅ <b>Доступ разрешён!</b>\n\n" + START_TEXT
+            )
+        else:
+            await message.answer(
+                "⚠️ Ошибка авторизации. Попробуй позже или обратись к администратору."
+            )
+        return
+
+    # Не авторизован и нет/неверный код
+    if config.AUTH_SECRET:
+        await message.answer(
+            "🔒 <b>Бот защищён кодовым словом.</b>\n\n"
+            "Для доступа отправь:\n"
+            f"<code>/start {config.AUTH_SECRET}</code>\n\n"
+            "Или обратись к администратору."
+        )
+    else:
+        # Если код не настроен — разрешаем доступ
+        authorize_user(supabase, user.id)
+        await message.answer(START_TEXT)
 
 
 @router.message(Command("help"))

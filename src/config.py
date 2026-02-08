@@ -37,7 +37,7 @@ SUPABASE_URL: str = _get("SUPABASE_URL")
 SUPABASE_KEY: str = _get("SUPABASE_KEY")
 
 # Опциональные (OpenRouter: по умолчанию Gemini 3 Flash с thinking)
-AUTH_SECRET: str = _get("AUTH_SECRET")
+AUTH_SECRET: str | None = _get_optional("AUTH_SECRET")
 OPENROUTER_MODEL: str | None = _get_optional("OPENROUTER_MODEL")
 LOG_LEVEL: str = _get_optional("LOG_LEVEL") or "INFO"
 WEBHOOK_URL: str | None = _get_optional("WEBHOOK_URL")

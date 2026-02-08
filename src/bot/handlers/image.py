@@ -15,6 +15,7 @@ from aiogram.types import Message
 
 from src.ai.openrouter_service import analyze_screenshot
 from src.config import GOOGLE_SHEET_ID
+from src.db.repositories.users import is_user_authorized
 from src.db.repositories.videos import insert_video
 from src.db.supabase_client import get_supabase
 from src.services.sheets_service import export_video_to_sheet
@@ -41,14 +42,28 @@ class VideoProcessingResult:
 async def handle_photo(message: Message, bot: Bot, album: list[Message] | None = None) -> None:
     """
     Обрабатывает альбом скриншотов (или одиночное фото).
-    
+
     Алгоритм:
-    1. Сортируем сообщения альбома по ID.
-    2. Разбиваем на пары (Overview + Retention).
-    3. Запускаем параллельный анализ для всех пар.
-    4. Сохраняем успешные результаты в БД/Google Sheets.
-    5. Формируем единый сводный отчет.
+    1. Проверяем авторизацию пользователя
+    2. Сортируем сообщения альбома по ID.
+    3. Разбиваем на пары (Overview + Retention).
+    4. Запускаем параллельный анализ для всех пар.
+    5. Сохраняем успешные результаты в БД/Google Sheets.
+    6. Формируем единый сводный отчет.
     """
+    # Проверяем авторизацию
+    user = message.from_user
+    if user:
+        supabase = get_supabase()
+        if not is_user_authorized(supabase, user.id):
+            from src import config
+            await message.answer(
+                "🔒 <b>Доступ ограничен.</b>\n\n"
+                "Для анализа видео сначала авторизуйся:\n"
+                f"<code>/start {config.AUTH_SECRET or 'код'}</code>"
+            )
+            return
+
     # Если middleware не передал album, используем само сообщение как список из 1
     messages = album or [message]
     
