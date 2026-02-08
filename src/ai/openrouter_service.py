@@ -221,7 +221,7 @@ Rules:
 - **Image Pairing:** You might receive images in any order. Determine which image corresponds to which part of the analysis (Overview vs Retention). Treat them as a single context for one video.
 - If the images do NOT show analytics (no views, no metrics, wrong content), still respond with valid JSON: set "platform" to "other", set "video_title" to null, use null for missing metrics, verdict "🟡 ITERATE", and in "analysis" briefly state what you see (e.g. "Screenshot does not show video analytics.").
 
-Output: reply with ONLY the JSON object. No text before or after, no markdown code fences, no explanation—just the single JSON object starting with { and ending with }.
+Output: reply with ONLY the JSON object. No text before or after, no markdown code fences, no explanation—just the single JSON object starting with {{ and ending with }}.
 """
 
 
