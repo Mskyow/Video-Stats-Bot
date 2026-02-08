@@ -8,10 +8,11 @@ import logging
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
 
 from src import config
-from src.bot.handlers import image_router, start_router, stats_router
+from src.bot.handlers import image_router, start_router, stats_router, upload_router
 from src.bot.middlewares.album import AlbumMiddleware
 from src.db.supabase_client import get_client
 
@@ -22,11 +23,13 @@ def _setup_dispatch(dp: Dispatcher, bot: Bot) -> None:
     """Регистрирует роутеры и middleware."""
     root = Router(name="root")
     supabase = get_client(config.SUPABASE_URL, config.SUPABASE_KEY)
-    
+
     # Собираем альбомы
     root.message.middleware(AlbumMiddleware(latency=0.6))
-    
-    root.include_routers(start_router, image_router, stats_router)
+
+    # Важно: upload_router должен быть ПЕРЕД image_router,
+    # чтобы команды /upload и /done обрабатывались первыми
+    root.include_routers(upload_router, start_router, image_router, stats_router)
     dp.include_router(root)
 
 
@@ -34,6 +37,8 @@ async def setup_bot_commands(bot: Bot) -> None:
     """Настройка меню команд бота."""
     commands = [
         BotCommand(command="start", description="Запуск бота"),
+        BotCommand(command="upload", description="Загрузить статистику видео"),
+        BotCommand(command="done", description="Завершить загрузку"),
         BotCommand(command="help", description="Справка по использованию"),
         BotCommand(command="stats", description="Моя статистика анализов"),
         BotCommand(command="day_stats", description="Отчет за последние 24 часа"),
@@ -56,7 +61,9 @@ async def main() -> None:
         token=config.TG_TOKEN,
         default=DefaultBotProperties(parse_mode="HTML"),
     )
-    dp = Dispatcher()
+    # FSM хранилище в памяти (при перезапуске бота состояния сбросятся)
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
     _setup_dispatch(dp, bot)
     await setup_bot_commands(bot)
 

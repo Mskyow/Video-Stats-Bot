@@ -11,9 +11,11 @@ from typing import Any
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramNetworkError
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from src.ai.openrouter_service import analyze_screenshot
+from src.bot.states import UploadMode
 from src.config import GOOGLE_SHEET_ID
 from src.db.repositories.users import is_user_authorized
 from src.db.repositories.videos import insert_video
@@ -39,17 +41,18 @@ class VideoProcessingResult:
 
 
 @router.message(F.photo)
-async def handle_photo(message: Message, bot: Bot, album: list[Message] | None = None) -> None:
+async def handle_photo(message: Message, bot: Bot, state: FSMContext, album: list[Message] | None = None) -> None:
     """
     Обрабатывает альбом скриншотов (или одиночное фото).
 
     Алгоритм:
     1. Проверяем авторизацию пользователя
-    2. Сортируем сообщения альбома по ID.
-    3. Разбиваем на пары (Overview + Retention).
-    4. Запускаем параллельный анализ для всех пар.
-    5. Сохраняем успешные результаты в БД/Google Sheets.
-    6. Формируем единый сводный отчет.
+    2. Проверяем, активен ли режим загрузки (UploadMode.active)
+    3. Сортируем сообщения альбома по ID.
+    4. Разбиваем на пары (Overview + Retention).
+    5. Запускаем параллельный анализ для всех пар.
+    6. Сохраняем успешные результаты в БД/Google Sheets.
+    7. Формируем единый сводный отчет.
     """
     # Проверяем авторизацию
     user = message.from_user
@@ -62,6 +65,16 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
                 "<code>/start КОДОВОЕ_СЛОВО</code>"
             )
             return
+
+    # Проверяем, активен ли режим загрузки
+    current_state = await state.get_state()
+    if current_state != UploadMode.active:
+        await message.answer(
+            "📸 Чтобы загружать скриншоты, сначала активируй режим загрузки:\n\n"
+            "<code>/upload</code> — войти в режим загрузки\n\n"
+            "После этого я буду готов принимать твои скриншоты статистики."
+        )
+        return
 
     # Если middleware не передал album, используем само сообщение как список из 1
     messages = album or [message]

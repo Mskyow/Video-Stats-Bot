@@ -2,5 +2,6 @@
 from src.bot.handlers.start import router as start_router
 from src.bot.handlers.image import router as image_router
 from src.bot.handlers.stats import router as stats_router
+from src.bot.handlers.upload import router as upload_router
 
-__all__ = ("start_router", "image_router", "stats_router")
+__all__ = ("start_router", "image_router", "stats_router", "upload_router")
