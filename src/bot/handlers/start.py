@@ -87,7 +87,7 @@ async def cmd_start(message: Message) -> None:
         await message.answer(
             "🔒 <b>Бот защищён кодовым словом.</b>\n\n"
             "Для доступа отправь:\n"
-            f"<code>/start {config.AUTH_SECRET}</code>\n\n"
+            "<code>/start КОДОВОЕ_СЛОВО</code>\n\n"
             "Или обратись к администратору."
         )
     else:

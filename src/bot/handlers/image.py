@@ -56,11 +56,10 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     if user:
         supabase = get_supabase()
         if not is_user_authorized(supabase, user.id):
-            from src import config
             await message.answer(
                 "🔒 <b>Доступ ограничен.</b>\n\n"
                 "Для анализа видео сначала авторизуйся:\n"
-                f"<code>/start {config.AUTH_SECRET or 'код'}</code>"
+                "<code>/start КОДОВОЕ_СЛОВО</code>"
             )
             return
 
