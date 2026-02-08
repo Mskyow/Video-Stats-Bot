@@ -3,10 +3,11 @@
 
 Функционал:
 - Авторизация через Service Account.
-- Экспорт всех хуков в существующую таблицу (без фильтрации по score).
+- Асинхронный экспорт данных через очередь (asyncio.Queue).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import date, datetime
@@ -21,15 +22,19 @@ from src.config import (
     GOOGLE_CREDENTIALS_JSON,
     GOOGLE_SHEET_ID,
     GOOGLE_SHEET_WORKSHEET_NAME,
+    SHEETS_WRITE_DELAY,
 )
 
 logger = logging.getLogger(__name__)
+
+# Глобальная очередь для экспорта данных
+_export_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
 
 def _get_credentials() -> ServiceAccountCredentials:
     """
     Загружает credentials для Google Sheets.
-    
+
     Поддерживает два способа:
     - Из JSON-файла (локально, GOOGLE_SHEET_CREDENTIALS_PATH)
     - Из переменной окружения (Railway, GOOGLE_CREDENTIALS_JSON)
@@ -98,9 +103,9 @@ def _get_worksheet(client: gspread.Client) -> gspread.Worksheet:
     return worksheet
 
 
-def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
+def _sync_export_to_sheet(video_data: dict[str, Any]) -> bool:
     """
-    Экспортирует полные данные видео в Google Sheet.
+    Синхронная функция экспорта данных видео в Google Sheet.
 
     Колонки (Strict Order):
     - Col A: Processed At (Current Timestamp)
@@ -118,8 +123,6 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
     - Col M: Avg Watch Time (Raw)
     - Col N: Engagement Rate (%)
 
-    NOTE: Добавлена колонка N (Engagement Rate). Обновите заголовки в Google Sheets вручную.
-
     Args:
         video_data: Словарь с результатами анализа AI.
 
@@ -130,13 +133,13 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
     if not credentials_configured or not GOOGLE_SHEET_ID:
         logger.debug("Google Sheets not configured; skip export")
         return False
-        
+
     try:
         client = _get_client()
         worksheet = _get_worksheet(client)
 
         # 1. Подготовка данных (Mapping)
-        
+
         # A: Processed At
         processed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         processed_at_dt = datetime.now()
@@ -167,42 +170,42 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
              platform = str(platform).capitalize()
         else:
              platform = "Not Recognized"
-        
+
         # D: Video Title
         video_title = video_data.get("video_title")
         if not video_title:
             video_title = "Not Found"
-        
+
         # E: Hook Type
         hook_type = video_data.get("hook_type")
         if not hook_type:
             hook_type = "Not Found"
-            
+
         # F: Score
         score = video_data.get("score")
         if score is None:
             score = 0
-            
+
         # G: Verdict
         verdict = video_data.get("verdict")
         if not verdict:
             verdict = "Not Found"
-        
+
         # H: Views
         views = metrics.get("views")
         if views is None:
             views = "Not Found"
-        
+
         # I: Likes
         likes = metrics.get("likes")
         if likes is None:
             likes = "Not Found"
-        
+
         # J: Shares
         shares = metrics.get("shares")
         if shares is None:
             shares = "Not Found"
-        
+
         # K: Retention 3s
         retention_3s = metrics.get("retention_3s")
         # Fallback to tier_1 if missing in metrics
@@ -210,9 +213,9 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
             tier_1 = video_data.get("tier_1_analysis") or {}
             if tier_1.get("hook_3s"):
                 retention_3s = tier_1["hook_3s"].get("value")
-        
+
         retention_3s_val = f"{retention_3s}%" if retention_3s is not None else "Not Found"
-        
+
         # L: Avg Watch Time
         # Looking for avg_watch_time_pct in metrics
         avg_watch_time = metrics.get("avg_watch_time_pct")
@@ -254,7 +257,7 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
             avg_watch_time_val, # M
             er_val              # N
         ]
-        
+
         # Отправка в Google Sheets
         worksheet.append_row(row)
         logger.info(f"Exported video to sheet: '{video_title}' (Score: {score})")
@@ -270,3 +273,25 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
         logger.error(f"Failed to export video to sheet: {e}")
         # Не роняем бота, просто логируем ошибку
         return False
+
+
+async def sheets_worker() -> None:
+    """
+    Асинхронный воркер для обработки очереди экспорта в Google Sheets.
+    Работает в бесконечном цикле, обрабатывая задачи из очереди.
+    """
+    while True:
+        data = await _export_queue.get()
+
+        try:
+            await asyncio.to_thread(_sync_export_to_sheet, data)
+        except Exception as e:
+            logger.error(f"Error in sheets_worker: {e}")
+        finally:
+            _export_queue.task_done()
+            await asyncio.sleep(SHEETS_WRITE_DELAY)
+
+
+async def queue_export_to_sheet(video_data: dict[str, Any]) -> None:
+    """Добавляет данные в очередь на экспорт."""
+    await _export_queue.put(video_data)

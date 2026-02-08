@@ -15,6 +15,7 @@ from src import config
 from src.bot.handlers import image_router, start_router, stats_router, upload_router
 from src.bot.middlewares.album import AlbumMiddleware
 from src.db.supabase_client import get_client
+from src.services.sheets_service import sheets_worker
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,10 @@ async def main() -> None:
     dp = Dispatcher(storage=storage)
     _setup_dispatch(dp, bot)
     await setup_bot_commands(bot)
+
+    # Запускаем воркер Google Sheets для асинхронного экспорта
+    asyncio.create_task(sheets_worker())
+    logger.info("Background sheets worker started")
 
     if config.WEBHOOK_URL:
         # Webhook: нужен запущенный HTTP-сервер и заданный WEBHOOK_URL

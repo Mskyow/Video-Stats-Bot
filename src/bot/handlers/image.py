@@ -16,14 +16,17 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src.ai.openrouter_service import analyze_screenshot
 from src.bot.states import UploadMode
-from src.config import GOOGLE_SHEET_ID
+from src.config import GOOGLE_SHEET_ID, MAX_CONCURRENT_ANALYSIS
 from src.db.repositories.users import is_user_authorized
 from src.db.repositories.videos import insert_video
 from src.db.supabase_client import get_supabase
-from src.services.sheets_service import export_video_to_sheet
+from src.services.sheets_service import queue_export_to_sheet
 
 router = Router(name="image")
 logger = logging.getLogger(__name__)
+
+# Семафор для ограничения одновременных запросов к AI
+ai_semaphore = asyncio.Semaphore(MAX_CONCURRENT_ANALYSIS)
 
 
 @dataclass
@@ -226,7 +229,7 @@ async def handle_photo(message: Message, bot: Bot, state: FSMContext, album: lis
 
                     # Экспорт в Google Sheets (не делаем для дубликатов)
                     if GOOGLE_SHEET_ID:
-                        await asyncio.to_thread(export_video_to_sheet, res.ai_result)
+                        await queue_export_to_sheet(res.ai_result)
                 else:
                     # Если нет supabase, считаем что сохранение не удалось
                     failed_count += 1
@@ -289,11 +292,12 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
         )
         
         # AI Анализ (в треде, т.к. requests синхронный)
-        result_json, raw_response = await asyncio.to_thread(
-            analyze_screenshot,
-            list(images_bytes),
-            mime_type="image/jpeg",
-        )
+        async with ai_semaphore:
+            result_json, raw_response = await asyncio.to_thread(
+                analyze_screenshot,
+                list(images_bytes),
+                mime_type="image/jpeg",
+            )
         
         if not result_json:
             return VideoProcessingResult(

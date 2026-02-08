@@ -54,6 +54,11 @@ GOOGLE_SHEET_ID: str | None = _get_optional("GOOGLE_SHEET_ID")
 GOOGLE_SHEET_WORKSHEET_NAME: str = _get_optional("GOOGLE_SHEET_WORKSHEET_NAME") or "Hook Analytics"
 REPORT_CHAT_ID: int | None = int(v) if (v := _get_optional("REPORT_CHAT_ID")) else None
 
+# Лимит одновременных запросов к AI
+MAX_CONCURRENT_ANALYSIS: int = 4
+# Задержка между записями в таблицу (секунды)
+SHEETS_WRITE_DELAY: float = 1.2
+
 
 def setup_logging() -> None:
     """Настраивает уровень логирования по LOG_LEVEL."""
