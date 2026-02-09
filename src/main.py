@@ -14,6 +14,7 @@ from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeCha
 from src import config
 from src.bot.handlers import image_router, start_router, stats_router, upload_router
 from src.bot.middlewares.album import AlbumMiddleware
+from src.bot.middlewares.auth import AuthMiddleware
 from src.db.supabase_client import get_client
 from src.services.sheets_service import sheets_worker
 
@@ -24,6 +25,11 @@ def _setup_dispatch(dp: Dispatcher, bot: Bot) -> None:
     """Регистрирует роутеры и middleware."""
     root = Router(name="root")
     supabase = get_client(config.SUPABASE_URL, config.SUPABASE_KEY)
+
+    # Auth middleware FIRST (adds supabase_client to context)
+    root.message.middleware(AuthMiddleware(supabase, bot))
+    # Callback queries also need auth
+    root.callback_query.middleware(AuthMiddleware(supabase, bot))
 
     # Собираем альбомы
     root.message.middleware(AlbumMiddleware(latency=0.6))

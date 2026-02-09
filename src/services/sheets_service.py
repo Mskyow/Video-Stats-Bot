@@ -171,10 +171,19 @@ def _sync_export_to_sheet(video_data: dict[str, Any]) -> bool:
         else:
              platform = "Not Recognized"
 
-        # D: Video Title (from AI result - field is named 'title', not 'video_title')
-        video_title = video_data.get("title")
-        if not video_title:
-            video_title = "Not Found"
+        # Add "(Carousel)" label if content_type is "carousel"
+        content_type = video_data.get("content_type")
+        if content_type == "carousel":
+            platform = f"{platform} (Carousel)"
+
+        # E: Video Title - use hook_text if available, otherwise fall back to title
+        hook_text = video_data.get("hook_text")
+        if hook_text and hook_text.strip():
+            video_title = hook_text.strip()
+        else:
+            video_title = video_data.get("title")
+            if not video_title:
+                video_title = "Not Found"
 
         # E: Hook Type
         hook_type = video_data.get("hook_type")

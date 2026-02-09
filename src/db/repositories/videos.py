@@ -243,6 +243,8 @@ def insert_video(
             "hook_score": hook_rating,
             "detailed_analysis": detailed,
             "video_duration_sec": result.get("video_duration_sec"),
+            "content_type": result.get("content_type", "video"),
+            "hook_text": result.get("hook_text"),
         }
 
         if raw_ai_response:
