@@ -29,7 +29,13 @@ DEFAULT_MODEL = "google/gemini-3-flash-preview"
 # System Prompt: Optimized & Strict
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are **Creator Copilot** — a Senior Growth Analyst.
+SYSTEM_PROMPT = """You are an expert Analyst. You will receive a batch of N screenshots. Your first task is to mentally GROUP them into distinct video reports based on visual similarity (thumbnails, UI dates, titles). Do not mix metrics from different videos.
+
+## BATCH PROCESSING INSTRUCTION
+You will receive a batch of screenshots belonging to one or MULTIPLE videos.
+Your task is to visually GROUP these screenshots by video (e.g., by matching thumbnails, titles, or dates).
+One video might have 1, 2, or 3 screenshots (e.g., Overview + Retention + Audience).
+Analyze each group independently.
 
 ## MISSION
 Analyze social media metrics screenshots to determine content performance.
@@ -124,33 +130,35 @@ Look at the UI elements to determine `content_type`:
 - If ER < 3% but Completion OK -> ✂️ FIX VALUE (Add CTA)
 - If Comment Share >= 15% -> 🟢 ITERATE (High Interest)
 
-## 4. OUTPUT FORMAT (JSON ONLY)
-Respond with this exact JSON structure. No markdown, no conversation.
+## 4. OUTPUT FORMAT
+Respond with a JSON Array (list[dict]), where each object represents one video analysis. Structure of objects remains the same as before. No markdown, no conversation.
 
-{
-  "content_type": "video" | "carousel",
-  "hook_text": "<text found on the thumbnail image>",
-  "hook_type": "short" | "medium" | "long",
-  "video_title": "<caption text or null>",
-  "posted_at": "<extracted date string or null>",
-  "platform": "tiktok" | "instagram" | "youtube" | "other",
-  "metrics": {
-    "views": <number>,
-    "likes": <number>,
-    "comments": <number>,
-    "shares": <number>,
-    "saves": <number>,
-    "retention_3s": <number_pct or null>,
-    "avg_watch_time_sec": <number or null>,
-    "avg_watch_time_pct": <number_pct or null>,
-    "photos_viewed": <number or null>,
-    "total_photos": <number or null>
-  },
-  "score": <0-100>,
-  "verdict": "🔴 KILL HOOK" | "✂️ FIX BODY" | "🟡 ITERATE" | "🚀 SCALE HARD",
-  "analysis": "<Short analysis in Russian. Explain WHY based on the content type metrics.>",
-  "recommendations": ["<Actionable tip 1>", "<Actionable tip 2>"]
-}
+[
+  {
+    "content_type": "video" | "carousel",
+    "hook_text": "<text found on the thumbnail image>",
+    "hook_type": "short" | "medium" | "long",
+    "video_title": "<caption text or null>",
+    "posted_at": "<extracted date string or null>",
+    "platform": "tiktok" | "instagram" | "youtube" | "other",
+    "metrics": {
+      "views": <number>,
+      "likes": <number>,
+      "comments": <number>,
+      "shares": <number>,
+      "saves": <number>,
+      "retention_3s": <number_pct or null>,
+      "avg_watch_time_sec": <number or null>,
+      "avg_watch_time_pct": <number_pct or null>,
+      "photos_viewed": <number or null>,
+      "total_photos": <number or null>
+    },
+    "score": <0-100>,
+    "verdict": "🔴 KILL HOOK" | "✂️ FIX BODY" | "🟡 ITERATE" | "🚀 SCALE HARD",
+    "analysis": "<Short analysis in Russian. Explain WHY based on the content type metrics.>",
+    "recommendations": ["<Actionable tip 1>", "<Actionable tip 2>"]
+  }
+]
 """
 
 USER_PROMPT = """Analyze these screenshots.
@@ -203,19 +211,21 @@ def _extract_json_object(text: str) -> str | None:
     return None
 
 
-def _parse_response(text: str) -> dict[str, Any] | None:
-    """Извлекает и валидирует JSON из ответа."""
+def _parse_response(text: str) -> list[dict[str, Any]] | None:
+    """Извлекает и валидирует JSON массив из ответа."""
     if not text:
         return None
-    
+
+    parsed = None
+
     # Попытка 1: Прямой парсинг
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except json.JSONDecodeError:
         pass
 
     # Попытка 2: Извлечение из Markdown ```json ... ```
-    if "```" in text:
+    if parsed is None and "```" in text:
         lines = text.split("\n")
         out = []
         in_block = False
@@ -227,28 +237,40 @@ def _parse_response(text: str) -> dict[str, Any] | None:
                 out.append(line)
         if out:
             try:
-                return json.loads("\n".join(out))
+                parsed = json.loads("\n".join(out))
             except json.JSONDecodeError:
                 pass
 
     # Попытка 3: Поиск по скобкам
-    extracted = _extract_json_object(text)
-    if extracted:
-        try:
-            return json.loads(extracted)
-        except json.JSONDecodeError:
-            pass
+    if parsed is None:
+        extracted = _extract_json_object(text)
+        if extracted:
+            try:
+                parsed = json.loads(extracted)
+            except json.JSONDecodeError:
+                pass
 
-    logger.error("Failed to parse JSON response. Raw length: %d", len(text))
-    return None
+    if parsed is None:
+        logger.error("Failed to parse JSON response. Raw length: %d", len(text))
+        return None
+
+    # Если AI вернул одиночный словарь, оборачиваем в список
+    if isinstance(parsed, dict):
+        return [parsed]
+    elif isinstance(parsed, list):
+        return parsed
+    else:
+        logger.error("Unexpected JSON type: %s", type(parsed))
+        return None
 
 
 def analyze_screenshot(
     images_list: list[bytes],
     mime_type: str = "image/jpeg",
-) -> tuple[dict[str, Any] | None, str | None]:
+) -> tuple[list[dict[str, Any]] | None, str | None]:
     """
     Отправляет скриншоты в OpenRouter.
+    Возвращает список результатов анализа (один результат на каждое уникальное видео).
     """
     model = (config.OPENROUTER_MODEL or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     api_key = config.OPENROUTER_API_KEY
@@ -286,23 +308,24 @@ def analyze_screenshot(
             OPENROUTER_URL,
             json=payload,
             headers=headers,
-            timeout=60,
+            timeout=120,  # Увеличенный таймаут для batch processing
         )
         resp.raise_for_status()
-        
+
         data = resp.json()
         choice = data.get("choices", [])[0]
         raw_text = choice.get("message", {}).get("content", "")
-        
-        parsed = _parse_response(raw_text)
-        
-        # Небольшой пост-процессинг для надежности
-        if parsed:
-            # Fallback для video_title, если OCR не сработал, но есть hook_text
-            if not parsed.get("video_title") and parsed.get("hook_text"):
-                parsed["video_title"] = parsed["hook_text"]
-                
-        return parsed, raw_text
+
+        parsed_list = _parse_response(raw_text)
+
+        # Пост-процессинг для каждого результата в списке
+        if parsed_list:
+            for parsed in parsed_list:
+                # Fallback для video_title, если OCR не сработал, но есть hook_text
+                if not parsed.get("video_title") and parsed.get("hook_text"):
+                    parsed["video_title"] = parsed["hook_text"]
+
+        return parsed_list, raw_text
 
     except Exception as e:
         logger.exception("AI Analysis failed: %s", e)

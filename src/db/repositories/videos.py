@@ -213,11 +213,17 @@ def insert_video(
         posted_at_str = result.get("posted_at")
         if posted_at_str:
             try:
-                posted_at_dt = datetime.strptime(posted_at_str, "%Y-%m-%d %H:%M:%S")
+                # Try parsing datetime with time first
+                try:
+                    posted_at_dt = datetime.strptime(posted_at_str, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    # Fallback to date-only format (assume start of day)
+                    posted_at_dt = datetime.strptime(posted_at_str, "%Y-%m-%d")
+
                 age_hours = (datetime.utcnow() - posted_at_dt).total_seconds() / 3600
-                full_metrics["hours_since_post"] = round(age_hours, 1)
-            except (ValueError, TypeError):
-                logger.warning("Failed to parse posted_at: %s", posted_at_str)
+                full_metrics["age_hours"] = round(age_hours, 1)
+            except (ValueError, TypeError) as e:
+                logger.warning("Failed to parse posted_at '%s': %s", posted_at_str, e)
 
         # Детальный анализ: tier_1 + tier_2 + heuristics + recommendations
         detailed = {

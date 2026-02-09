@@ -1,5 +1,5 @@
 """
-Приём медиа-группы (альбома скриншотов) → Параллельный AI анализ → Сводный отчёт → Сохранение.
+Приём медиа-группы (альбома скриншотов) → Batch AI анализ → Сводный отчёт → Сохранение.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src.ai.openrouter_service import analyze_screenshot
 from src.bot.states import UploadMode
-from src.config import GOOGLE_SHEET_ID, MAX_CONCURRENT_ANALYSIS
+from src.config import GOOGLE_SHEET_ID
 from src.db.repositories.users import is_user_authorized
 from src.db.repositories.videos import insert_video
 from src.db.supabase_client import get_supabase
@@ -25,13 +25,11 @@ from src.services.sheets_service import queue_export_to_sheet
 router = Router(name="image")
 logger = logging.getLogger(__name__)
 
-# Семафор для ограничения одновременных запросов к AI
-ai_semaphore = asyncio.Semaphore(MAX_CONCURRENT_ANALYSIS)
-
 
 @dataclass
 class VideoProcessingResult:
-    """Результат обработки одного видео (пары скриншотов)."""
+    """Результат обработки одного видео."""
+
     index: int
     video_title: str | None = None
     success: bool = False
@@ -40,12 +38,13 @@ class VideoProcessingResult:
     error_message: str | None = None
     ai_result: dict[str, Any] | None = None
     raw_response: str | None = None
-    is_orphan: bool = False  # Если не хватило пары (нечетное кол-во)
     is_duplicate: bool = False  # Если видео дубликат (данные не изменились)
 
 
 @router.message(F.photo)
-async def handle_photo(message: Message, bot: Bot, state: FSMContext, album: list[Message] | None = None) -> None:
+async def handle_photo(
+    message: Message, bot: Bot, state: FSMContext, album: list[Message] | None = None
+) -> None:
     """
     Обрабатывает альбом скриншотов (или одиночное фото).
 
@@ -53,8 +52,8 @@ async def handle_photo(message: Message, bot: Bot, state: FSMContext, album: lis
     1. Проверяем авторизацию пользователя
     2. Проверяем, активен ли режим загрузки (UploadMode.active)
     3. Сортируем сообщения альбома по ID.
-    4. Разбиваем на пары (Overview + Retention).
-    5. Запускаем параллельный анализ для всех пар.
+    4. Скачиваем все фото параллельно.
+    5. Отправляем batch-запрос в AI для анализа всех скриншотов.
     6. Сохраняем успешные результаты в БД/Google Sheets.
     7. Формируем единый сводный отчет.
     """
@@ -82,121 +81,50 @@ async def handle_photo(message: Message, bot: Bot, state: FSMContext, album: lis
 
     # Если middleware не передал album, используем само сообщение как список из 1
     messages = album or [message]
-    
-    # 1. Сортировка и валидация
+
+    # Сортировка сообщений по ID
     messages.sort(key=lambda m: m.message_id)
-    
-    # Если это первая часть альбома, который еще собирается, то middleware
-    # может отдать управление сюда. Но middleware должен был собрать все.
-    # Если album передан - значит он уже собран полностью.
-    
-    pairs = []
-    orphans = []
-    
-    # Разбиваем на пары [A, B], [C, D]
-    # Предполагаем, что скриншоты идут парами: Обзор + Удержание
-    # Порядок внутри пары не гарантирован телеграмом, но обычно последователен.
-    # Мы будем передавать ОБА фото в AI и просить разобраться.
-    for i in range(0, len(messages), 2):
-        if i + 1 < len(messages):
-            pairs.append((messages[i], messages[i+1]))
-        else:
-            orphans.append(messages[i])
-            
-    total_videos = len(pairs) + len(orphans)
-    if total_videos == 0:
+
+    if not messages:
         return
 
-    # Отправляем сообщение о начале обработки (если много видео)
-    if len(messages) > 1:
-        processing_msg = await message.answer(
-            f"⏳ Скриншотов: {len(messages)} | Видео: {len(pairs)}\n"
-            f"Анализирую... (~15-30 сек)"
+    # Отправляем сообщение о начале обработки
+    processing_msg = await message.answer(
+        f"⏳ Анализирую пакет из {len(messages)} скриншотов... (~15-30 сек)"
+    )
+
+    # 1. Параллельное скачивание всех фото
+    try:
+        images_bytes = await _download_all_photos(messages, bot)
+    except Exception as e:
+        logger.exception("Failed to download photos: %s", e)
+        await processing_msg.edit_text(f"❌ Ошибка при скачивании фото: {str(e)[:100]}")
+        return
+
+    if not images_bytes:
+        await processing_msg.edit_text("❌ Не удалось скачать ни одного фото.")
+        return
+
+    # 2. Batch AI анализ (один запрос на все скриншоты)
+    try:
+        ai_results, raw_response = await asyncio.to_thread(
+            analyze_screenshot,
+            images_bytes,
+            mime_type="image/jpeg",
         )
-    else:
-        # Для одиночного фото тоже нужен фидбек
-        processing_msg = await message.answer("⏳ Анализирую...")
+    except Exception as e:
+        logger.exception("AI analysis failed: %s", e)
+        await processing_msg.edit_text(f"❌ Ошибка AI анализа: {str(e)[:100]}")
+        return
 
-    # === Прогресс-бар: переменные и настройка ===
-    total_videos = len(pairs)
-    completed_count = 0
-    last_update_time = 0.0
-    update_lock = asyncio.Lock()
+    if not ai_results:
+        await processing_msg.edit_text(
+            "⚠️ Не удалось распознать данные из скриншотов. Попробуй ещё раз с более чёткими фото."
+        )
+        return
 
-    async def update_progress():
-        """Обновляет прогресс-бар с тротлингом (макс 1 раз в 1.5 сек)."""
-        nonlocal last_update_time
-
-        async with update_lock:
-            percent = int((completed_count / total_videos) * 100)
-
-            # Тротлинг: обновляем только если прошло > 1.5 сек ИЛИ это 100%
-            import time
-            current_time = time.time()
-            if percent < 100 and (current_time - last_update_time) <= 1.5:
-                return
-
-            # Генерируем полоску ▰▰▰▰▱▱▱▱▱▱
-            filled = percent // 10
-            bar = "▰" * filled + "▱" * (10 - filled)
-
-            text = f"⏳ Анализ: {bar} {percent}%"
-
-            try:
-                await processing_msg.edit_text(text)
-                last_update_time = current_time
-            except Exception:
-                # Игнорируем ошибки Telegram (например, "message not modified")
-                pass
-
-    async def process_wrapper(idx: int, m1: Message, m2: Message, bot: Bot) -> VideoProcessingResult:
-        """Обертка: выполняет задачу и обновляет прогресс."""
-        nonlocal completed_count
-
-        result = await process_single_video(idx, m1, m2, bot)
-
-        async with update_lock:
-            completed_count += 1
-
-        await update_progress()
-        return result
-
-    # 2. Параллельная обработка (The Engine)
-    tasks = []
-    for idx, (msg1, msg2) in enumerate(pairs, start=1):
-        tasks.append(process_wrapper(idx, msg1, msg2, bot))
-
-    # Добавляем "орфанные" (непарные) как ошибки
+    # 3. Обработка результатов и сохранение
     results: list[VideoProcessingResult] = []
-    
-    # Запускаем задачи
-    if tasks:
-        processed_results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        for res in processed_results:
-            if isinstance(res, VideoProcessingResult):
-                results.append(res)
-            elif isinstance(res, Exception):
-                # Критическая ошибка в таске (не должна случаться, т.к. внутри catch-all)
-                logger.error("Critical error in worker task: %s", res)
-                # Добавляем заглушку ошибки
-                results.append(VideoProcessingResult(index=0, success=False, error_message=str(res)))
-
-    # Обработка непарных (skipped)
-    for i, orphan_msg in enumerate(orphans):
-        # Индекс продолжаем после пар
-        idx = len(pairs) + 1 + i
-        results.append(VideoProcessingResult(
-            index=idx,
-            success=False,
-            is_orphan=True,
-            error_message="⚠️ Непарный скриншот — нужна пара: Обзор + Удержание"
-        ))
-
-    # Сортируем результаты по индексу для отчета
-    results.sort(key=lambda r: r.index)
-
-    # 3. Сохранение данных (Fault Tolerance: сохраняем то, что успешно)
     saved_count = 0
     failed_count = 0
     duplicate_count = 0
@@ -204,8 +132,10 @@ async def handle_photo(message: Message, bot: Bot, state: FSMContext, album: lis
     user_id = message.from_user.id if message.from_user else 0
     supabase = get_supabase()
 
-    for res in results:
-        if res.success and res.ai_result:
+    for idx, ai_result in enumerate(ai_results, start=1):
+        result = _convert_ai_result_to_processing_result(idx, ai_result, raw_response)
+
+        if result.success:
             try:
                 # Сохранение в Supabase
                 if supabase and user_id:
@@ -213,34 +143,48 @@ async def handle_photo(message: Message, bot: Bot, state: FSMContext, album: lis
                         insert_video,
                         supabase,
                         user_id,
-                        res.ai_result,
-                        res.raw_response,
+                        result.ai_result,
+                        result.raw_response,
                     )
 
                     # Проверяем, является ли видео дубликатом
-                    if db_result and db_result.get("skipped") and db_result.get("duplicate"):
-                        res.is_duplicate = True
+                    if (
+                        db_result
+                        and db_result.get("skipped")
+                        and db_result.get("duplicate")
+                    ):
+                        result.is_duplicate = True
                         duplicate_count += 1
-                        logger.info(f"Video {res.index} is duplicate, skipping Google Sheets export")
-                        continue
+                        logger.info(
+                            "Video %d is duplicate, skipping Google Sheets export", idx
+                        )
+                    else:
+                        # Видео сохранено (NEW или UPDATE)
+                        saved_count += 1
 
-                    # Если дошли сюда, видео сохранено (NEW или UPDATE)
-                    saved_count += 1
-
-                    # Экспорт в Google Sheets (не делаем для дубликатов)
-                    if GOOGLE_SHEET_ID:
-                        await queue_export_to_sheet(res.ai_result)
+                        # Экспорт в Google Sheets (не делаем для дубликатов)
+                        if GOOGLE_SHEET_ID:
+                            await queue_export_to_sheet(result.ai_result)
                 else:
                     # Если нет supabase, считаем что сохранение не удалось
+                    result.success = False
+                    result.error_message = "❌ Нет подключения к базе данных"
                     failed_count += 1
+
             except Exception as e:
-                logger.error(f"Failed to save video {res.index}: {e}")
+                logger.error(f"Failed to save video {idx}: {e}")
+                result.success = False
+                result.error_message = f"❌ Ошибка сохранения: {str(e)[:40]}"
                 failed_count += 1
         else:
             failed_count += 1
 
-    # 4. Формирование отчета (UX)
-    report_text = build_summary_report(results, saved_count, failed_count, duplicate_count, len(messages))
+        results.append(result)
+
+    # 4. Формирование отчета
+    report_text = build_summary_report(
+        results, saved_count, failed_count, duplicate_count, len(messages)
+    )
 
     # Клавиатура с ссылкой на Google Sheet
     keyboard = None
@@ -252,106 +196,117 @@ async def handle_photo(message: Message, bot: Bot, state: FSMContext, album: lis
             ]
         )
 
-    # Отправка отчета с кнопкой
+    # Отправка отчета
     try:
         await processing_msg.edit_text(report_text, reply_markup=keyboard)
     except Exception:
         await message.answer(report_text, reply_markup=keyboard)
 
 
-async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bot) -> VideoProcessingResult:
-    """
-    Скачивает два фото, отправляет в AI, возвращает результат.
-    Не падает при ошибках (Fault Tolerance).
-    """
-    try:
-        # Скачиваем фото параллельно
-        # Берем photo[-1] (наилучшее качество)
-        photos = [msg1.photo[-1], msg2.photo[-1]] # type: ignore
-        
-        # Функция для скачивания с ретраями/обработкой
-        async def download(file_id: str) -> bytes:
-            try:
-                file_info = await bot.get_file(file_id)
-                if not file_info.file_path:
-                    raise ValueError("No file path")
-                
-                downloaded = await bot.download_file(file_info.file_path)
-                if downloaded is None:
-                    raise ValueError("Empty response")
-                    
-                return downloaded.read() if hasattr(downloaded, "read") else bytes(downloaded)
-            except TelegramNetworkError:
-                # Простейший retry logic можно добавить здесь, но для скорости пока без него
-                raise
-        
-        # Параллельная загрузка двух файлов
-        images_bytes = await asyncio.gather(
-            download(photos[0].file_id),
-            download(photos[1].file_id)
-        )
-        
-        # AI Анализ (в треде, т.к. requests синхронный)
-        async with ai_semaphore:
-            result_json, raw_response = await asyncio.to_thread(
-                analyze_screenshot,
-                list(images_bytes),
-                mime_type="image/jpeg",
-            )
-        
-        if not result_json:
-            return VideoProcessingResult(
-                index=index,
-                success=False,
-                error_message="⚠️ Не удалось распознать метрики"
-            )
-            
-        # Успешный анализ
-        title = result_json.get("video_title") or f"Video #{index}"
-        score = result_json.get("score", 0)
-        
-        # Определение рейтинга для краткости (Kill/Iterate/Scale)
-        verdict = result_json.get("verdict", "")
-        rating_label = "N/A"
-        if "KILL" in verdict:
-            rating_label = "Kill"
-        elif "ITERATE" in verdict:
-            rating_label = "Iterate"
-        elif "SCALE" in verdict:
-            rating_label = "Scale"
-            
-        return VideoProcessingResult(
-            index=index,
-            success=True,
-            video_title=title,
-            score=score,
-            rating_label=rating_label,
-            ai_result=result_json,
-            raw_response=raw_response
-        )
+async def _download_all_photos(messages: list[Message], bot: Bot) -> list[bytes]:
+    """Параллельно скачивает все фото из списка сообщений."""
 
-    except Exception as e:
-        logger.exception(f"Error processing video {index}: {e}")
+    async def download_single(message: Message) -> bytes | None:
+        """Скачивает фото из одного сообщения."""
+        try:
+            if not message.photo:
+                return None
+
+            # Берем фото наилучшего качества
+            photo = message.photo[-1]
+            file_id = photo.file_id
+
+            file_info = await bot.get_file(file_id)
+            if not file_info.file_path:
+                raise ValueError("No file path")
+
+            downloaded = await bot.download_file(file_info.file_path)
+            if downloaded is None:
+                raise ValueError("Empty response")
+
+            return (
+                downloaded.read()
+                if hasattr(downloaded, "read")
+                else bytes(downloaded)
+            )
+        except Exception as e:
+            logger.warning(f"Failed to download photo from message {message.message_id}: {e}")
+            return None
+
+    # Параллельное скачивание всех фото
+    download_tasks = [download_single(msg) for msg in messages]
+    downloaded = await asyncio.gather(*download_tasks, return_exceptions=True)
+
+    # Фильтруем успешные результаты
+    images_bytes: list[bytes] = []
+    for result in downloaded:
+        if isinstance(result, bytes) and result:
+            images_bytes.append(result)
+        elif isinstance(result, Exception):
+            logger.warning(f"Download task failed: {result}")
+
+    return images_bytes
+
+
+def _convert_ai_result_to_processing_result(
+    index: int, ai_result: dict[str, Any], raw_response: str | None
+) -> VideoProcessingResult:
+    """Конвертирует результат AI в VideoProcessingResult."""
+
+    if not ai_result or not isinstance(ai_result, dict):
         return VideoProcessingResult(
             index=index,
             success=False,
-            error_message=f"⚠️ Ошибка: {str(e)[:40]}"
+            error_message="⚠️ Пустой или некорректный результат AI",
         )
 
+    title = ai_result.get("video_title") or ai_result.get("hook_text") or f"Video #{index}"
+    score = ai_result.get("score", 0)
 
-def build_summary_report(results: list[VideoProcessingResult], saved: int, failed: int, duplicates: int, total_images: int) -> str:
+    # Определение рейтинга для краткости (Kill/Iterate/Scale)
+    verdict = ai_result.get("verdict", "")
+    rating_label = "N/A"
+    if "KILL" in verdict:
+        rating_label = "Kill"
+    elif "ITERATE" in verdict:
+        rating_label = "Iterate"
+    elif "SCALE" in verdict:
+        rating_label = "Scale"
+
+    return VideoProcessingResult(
+        index=index,
+        success=True,
+        video_title=title,
+        score=score,
+        rating_label=rating_label,
+        ai_result=ai_result,
+        raw_response=raw_response,
+    )
+
+
+def build_summary_report(
+    results: list[VideoProcessingResult],
+    saved: int,
+    failed: int,
+    duplicates: int,
+    total_images: int,
+) -> str:
     """Формирует итоговое сообщение для пользователя."""
 
     total = len(results)
     lines = [
-        f"✅ Готово: {total} видео",
+        f"✅ Готово: {total} видео (скриншотов: {total_images})",
         f"💾 Сохранено: {saved} | ♻️ Дубликатов: {duplicates} | ❌ Ошибок: {failed}",
-        ""
+        "",
     ]
 
     for res in results:
         if res.success:
-            platform = res.ai_result.get("platform", "Unknown").capitalize() if res.ai_result else "Video"
+            platform = (
+                res.ai_result.get("platform", "Unknown").capitalize()
+                if res.ai_result
+                else "Video"
+            )
             title = res.video_title or "Untitled"
             if len(title) > 18:
                 title = title[:18] + "…"
@@ -363,11 +318,11 @@ def build_summary_report(results: list[VideoProcessingResult], saved: int, faile
                 icon = "🟡"
 
             line = f"{icon} {res.index}. [{platform}] {title} — {res.score}/100"
-            
+
             # Добавляем пометку для дубликатов
             if res.is_duplicate:
                 line += " ♻️ Данные не изменились"
-            
+
             lines.append(line)
         else:
             error_msg = res.error_message or "Ошибка"
