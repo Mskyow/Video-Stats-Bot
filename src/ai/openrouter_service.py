@@ -66,6 +66,11 @@ Look at the UI elements to determine `content_type`:
   Field: `hook_type`
 - **Average Watch Time (TikTok Fix):** Look specifically for the text block "On average, viewers watched **X%** of your video" inside the Retention section. If found, extract the percentage value. Field: `avg_watch_time_pct`.
 - **Carousel Retention (Analog):** For CAROUSEL content ONLY — analyze the retention graph. Estimate the percentage of users who reached the **3rd slide/photo**. Field: `retention_3s` (use this field as analog to video's 3-second retention).
+- **Carousel Avg Watch Time Calculation:** Do NOT look for time-based watch time (e.g. seconds) for carousels. Instead, look for the **'Photos viewed'** metric (pattern: 'X / Y', e.g., '2.5 / 5' or '3 / 6').
+  1. Extract these numbers.
+  2. Calculate the percentage: `(Photos Viewed / Total Photos) * 100`.
+  3. Write this percentage value into the JSON field `avg_watch_time_pct`.
+  Example: If '2.5 / 5' is found -> write `50` in `avg_watch_time_pct`.
 - **Metrics:** Extract all visible numbers. If a metric is missing (e.g., retention on a carousel), set to `null`.
 - **Calculated Rates:** Always calculate `aggregated_er = (likes + comments + shares + saves) / views * 100`.
 

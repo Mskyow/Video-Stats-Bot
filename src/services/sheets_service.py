@@ -119,10 +119,11 @@ def _sync_export_to_sheet(video_data: dict[str, Any]) -> bool:
     - Col I: Verdict (KILL/ITERATE/SCALE)
     - Col J: Views (Raw Int)
     - Col K: Likes (Raw Int)
-    - Col L: Shares (Raw Int)
-    - Col M: Retention 3s (Raw %)
-    - Col N: Avg Watch Time (Raw %)
-    - Col O: Engagement Rate (%)
+    - Col L: Comments (Raw Int)
+    - Col M: Shares (Raw Int)
+    - Col N: Retention 3s (Raw %)
+    - Col O: Avg Watch Time (Raw %)
+    - Col P: Engagement Rate (%)
 
     Args:
         video_data: Словарь с результатами анализа AI.
@@ -213,7 +214,12 @@ def _sync_export_to_sheet(video_data: dict[str, Any]) -> bool:
         if likes is None:
             likes = "Not Found"
 
-        # L: Shares
+        # L: Comments
+        comments = metrics.get("comments")
+        if comments is None:
+            comments = "0"
+
+        # M: Shares
         shares = metrics.get("shares")
         if shares is None:
             shares = "Not Found"
@@ -265,10 +271,11 @@ def _sync_export_to_sheet(video_data: dict[str, Any]) -> bool:
             verdict,            # I: Verdict
             views,              # J: Views
             likes,              # K: Likes
-            shares,             # L: Shares
-            retention_3s_val,   # M: Retention 3s
-            avg_watch_time_val, # N: Avg Watch Time (%)
-            er_val              # O: Engagement Rate (%)
+            comments,           # L: Comments
+            shares,             # M: Shares
+            retention_3s_val,   # N: Retention 3s
+            avg_watch_time_val, # O: Avg Watch Time (%)
+            er_val              # P: Engagement Rate (%)
         ]
 
         # Отправка в Google Sheets
