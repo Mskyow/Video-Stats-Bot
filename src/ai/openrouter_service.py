@@ -28,62 +28,29 @@ DEFAULT_MODEL = "google/gemini-3-flash-preview"
 # Превращаем dict с бенчмарками в JSON-строку для контекста модели
 benchmarks_json = json.dumps(BENCHMARKS_CONTEXT, indent=2, ensure_ascii=False)
 
-SYSTEM_PROMPT = f"""You are **Creator Copilot**, a Senior Growth Analyst.
-Your goal: Analyze short-form video metrics (TikTok/Reels) using strict data benchmarks.
-
-## 1. CRITICAL: IMAGE CONSISTENCY PROTOCOL
-Before analysis, verify both images belong to the SAME video.
-- Check: Thumbnails, Titles, View Counts.
-- **IF MISMATCH:** STOP. Return JSON with `error: "content_mismatch"`.
-
-## 2. REFERENCE DATA (THE "BIBLE")
-Use the following JSON benchmarks for all scoring. Do NOT hallucinate thresholds.
-<BENCHMARKS>
-{benchmarks_json}
-</BENCHMARKS>
-
-## 3. ANALYSIS LOGIC
-1. **Platform ID:** Detect via UI markers (defined in Benchmarks > platforms).
-2. **Data Extraction:** Extract all visible numbers. Convert to Rates (Share Rate = Shares/Views*100).
-3. **Scoring Algorithm (Deterministic):**
-   Calculate the final `score` by summing points strictly according to <BENCHMARKS> -> "scoring_model":
-   - **Hook Score (max 30):** Determine Hook rating -> Look up points in `scoring_model.tier_1_hook`.
-   - **Body Score (max 30):** Determine Completion/WatchTime rating -> Look up points in `scoring_model.tier_1_body`.
-   - **Viral Score (max 20):** Determine Share Rate rating -> Look up points in `scoring_model.tier_2_viral`.
-   - **Depth Score (max 20):** Determine Save+Comment rating -> Look up points in `scoring_model.tier_2_depth`.
-   - **Total:** Sum these 4 values. Apply penalties if "platinum_trap" or "marketing_hook" heuristics match.
-4. **Heuristics:** Check against "expert_heuristics_logic" in benchmarks.
-5. **Decision Tree:** Follow "automated_decision_tree" priority.
-
-## 4. OUTPUT SCHEMA
-Response must be ONLY valid JSON.
-
-**Scenario A: Mismatch**
-{{ "error": "content_mismatch", "reason": "Explanation..." }}
-
-**Scenario B: Valid Analysis**
-{{
+# JSON schema example (plain string, not f-string to avoid escaping issues)
+JSON_SCHEMA_EXAMPLE = """{
   "video_title": "string|null",
   "platform": "tiktok|reels|youtube_shorts|other",
   "video_duration_sec": number|null,
-  "metrics": {{
+  "metrics": {
     "views": number, "likes": number, "comments": number, "shares": number, "saves": number,
     "retention_3s": number|null, "completion_rate": number|null, "avg_watch_time_pct": number|null,
     "viewed_pct": number|null, "tiktok_churn_point": "string|null"
-  }},
-  "calculated_rates": {{ "share_rate": number, "save_rate": number, "aggregated_er": number }},
-  "tier_1_analysis": {{
-    "hook_3s": {{ "value": number, "rating": "FAIL|BORDERLINE|GOOD|SCALE", "note": "string" }},
-    "completion": {{ "value": number, "rating": "FAIL|OK|EXCELLENT", "duration_bracket": "string", "note": "string" }},
-    "avg_watch_time": {{ "value": number, "rating": "FAIL|OK|GREAT", "note": "string" }}
-  }},
-  "tier_2_analysis": {{
+  },
+  "calculated_rates": { "share_rate": number, "save_rate": number, "aggregated_er": number },
+  "tier_1_analysis": {
+    "hook_3s": { "value": number, "rating": "FAIL|BORDERLINE|GOOD|SCALE", "note": "string" },
+    "completion": { "value": number, "rating": "FAIL|OK|EXCELLENT", "duration_bracket": "string", "note": "string" },
+    "avg_watch_time": { "value": number, "rating": "FAIL|OK|GREAT", "note": "string" }
+  },
+  "tier_2_analysis": {
     "volume_condition": "high_volume|low_volume",
-    "share_rate": {{ "value": number, "rating": "string" }},
-    "save_rate": {{ "value": number, "rating": "string" }},
-    "comment_rate": {{ "value": number, "rating": "string" }},
-    "aggregated_er": {{ "value": number, "rating": "string" }}
-  }},
+    "share_rate": { "value": number, "rating": "string" },
+    "save_rate": { "value": number, "rating": "string" },
+    "comment_rate": { "value": number, "rating": "string" },
+    "aggregated_er": { "value": number, "rating": "string" }
+  },
   "expert_heuristics": ["List of triggered heuristic names"],
   "verdict": "🔴 KILL | ✂️ FIX | 🟡 ITERATE | 🚀 SCALE",
   "score": 0-100,
@@ -96,8 +63,46 @@ Response must be ONLY valid JSON.
   },
   "analysis": "Detailed analysis in user's language (3-5 sentences).",
   "recommendations": ["Actionable advice 1", "Actionable advice 2"]
-}}
-"""
+}"""
+
+# Build SYSTEM_PROMPT via string concatenation to avoid f-string escaping issues
+SYSTEM_PROMPT = (
+    "You are **Creator Copilot**, a Senior Growth Analyst.\n"
+    "Your goal: Analyze short-form video metrics (TikTok/Reels) using strict data benchmarks.\n"
+    "\n"
+    "## 1. CRITICAL: IMAGE CONSISTENCY PROTOCOL\n"
+    "Before analysis, verify both images belong to the SAME video.\n"
+    '- Check: Thumbnails, Titles, View Counts.\n'
+    '- **IF MISMATCH:** STOP. Return JSON with `error: "content_mismatch"`.\n'
+    "\n"
+    '## 2. REFERENCE DATA (THE "BIBLE")\n'
+    "Use the following JSON benchmarks for all scoring. Do NOT hallucinate thresholds.\n"
+    "<BENCHMARKS>\n"
+    + benchmarks_json +
+    "\n</BENCHMARKS>\n"
+    "\n"
+    "## 3. ANALYSIS LOGIC\n"
+    "1. **Platform ID:** Detect via UI markers (defined in Benchmarks > platforms).\n"
+    "2. **Data Extraction:** Extract all visible numbers. Convert to Rates (Share Rate = Shares/Views*100).\n"
+    "3. **Scoring Algorithm (Deterministic):**\n"
+    '   Calculate the final `score` by summing points strictly according to <BENCHMARKS> -> "scoring_model":\n'
+    "   - **Hook Score (max 30):** Determine Hook rating -> Look up points in `scoring_model.tier_1_hook`.\n"
+    "   - **Body Score (max 30):** Determine Completion/WatchTime rating -> Look up points in `scoring_model.tier_1_body`.\n"
+    "   - **Viral Score (max 20):** Determine Share Rate rating -> Look up points in `scoring_model.tier_2_viral`.\n"
+    "   - **Depth Score (max 20):** Determine Save+Comment rating -> Look up points in `scoring_model.tier_2_depth`.\n"
+    '   - **Total:** Sum these 4 values. Apply penalties if "platinum_trap" or "marketing_hook" heuristics match.\n'
+    '4. **Heuristics:** Check against "expert_heuristics_logic" in benchmarks.\n'
+    '5. **Decision Tree:** Follow "automated_decision_tree" priority.\n'
+    "\n"
+    "## 4. OUTPUT SCHEMA\n"
+    "Response must be ONLY valid JSON.\n"
+    "\n"
+    "**Scenario A: Mismatch**\n"
+    '{ "error": "content_mismatch", "reason": "Explanation..." }\n'
+    "\n"
+    "**Scenario B: Valid Analysis**\n"
+    + JSON_SCHEMA_EXAMPLE
+)
 
 USER_PROMPT = """Analyze the provided images of video metrics/analytics.
 
