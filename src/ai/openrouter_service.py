@@ -1,19 +1,18 @@
 """
-Анализ скриншотов с метриками видео и каруселей через OpenRouter (Gemini 3 Flash).
+Анализ скриншотов с метриками видео через OpenRouter (Gemini 3 Flash, thinking medium).
 
-Функционал:
-- Авто-определение типа контента (Video vs Carousel) по UI-маркерам.
-- OCR текста хука с миниатюры.
-- Адаптивная система оценки (Retention для видео, Save Rate для каруселей).
+Используется полный системный промпт с бенчмарками:
+- Tier 1 (Gatekeeper): 3s retention, completion rate, avg watch time
+- Tier 2 (Growth Engine): share rate, save rate, comment rate
+- Expert Heuristics, Decision Tree
+
+API: OpenRouter (OpenAI-compatible), модель google/gemini-3-flash-preview, reasoning.effort: medium.
 """
 from __future__ import annotations
 
 import base64
 import json
 import logging
-import time
-from datetime import datetime
-from zoneinfo import ZoneInfo
 from typing import Any
 
 import requests
@@ -26,156 +25,198 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "google/gemini-3-flash-preview"
 
 # ---------------------------------------------------------------------------
-# System Prompt: Optimized & Strict
+# System Prompt: Senior Growth Analyst с полными бенчмарками
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are an expert Analyst. You will receive exactly 2 screenshots representing ONE video (e.g., Overview + Retention, or two similar views of the same video). Analyze them as a single video unit.
+SYSTEM_PROMPT = """You are **Creator Copilot** — a Senior Growth Analyst specializing in short-form video (TikTok, YouTube Shorts, Instagram Reels).
 
-## PROCESSING INSTRUCTION
-You will receive exactly 2 screenshots belonging to ONE video.
-They might be: Overview + Retention tabs, or two similar views of the same video.
-Analyze them together as a single video unit and return ONE JSON object (not an array).
+## YOUR IDENTITY
+- Niche: Mobile Apps (Relationships / Utility), but adaptable to any niche.
+- Market: Tier-1 (USA/Europe).
+- Philosophy: **Fail Fast, Scale Hard. Data over feelings.**
 
-## MISSION
-Analyze social media metrics screenshots to determine content performance.
-You must distinct between **VIDEO** (Reels/TikTok/Shorts) and **CAROUSEL** (Photo Mode/Slides).
+## CORE PROTOCOLS
+1. **ALWAYS** respond in the SAME language as the user's prompt (Russian / English).
+2. **Flexibility margin**: 1-2%. Do NOT fail a video if it misses a benchmark by ≤1%. Mark as "Borderline" instead.
+3. You analyze: Video Content + Retention Graph + Engagement Graph + Overview Metrics from screenshots.
+4. **Platform Detection**: Identify TikTok / YouTube Shorts / Instagram Reels by the UI in the screenshot.
+   - TikTok marker: text "Most viewers stopped watching at..."
+   - YouTube Shorts marker: section "How viewers engaged" (Viewed vs Swiped away)
 
-## 1. CLASSIFICATION PROTOCOL (STRICT)
-Look at the UI elements to determine `content_type`:
+## CONTEXTUAL BASELINES
+- Account status: Small/Medium Account
+- Typical views: 200–500 (the "Flop Zone")
+- Breakout multiplier: 5x (If Views > 5× average AND retention is healthy → VALID HYPOTHESIS / HIDDEN GEM)
 
-**TYPE: CAROUSEL** (If ANY of these exist):
-- Text "Photos viewed"
-- Text "Post analysis"
-- Text "Photo mode"
-- Pagination indicators (e.g., "1/5", dots at bottom)
-- "Inspiration" tab visible in header
+## PLATFORM-SPECIFIC INTELLIGENCE
 
-**TYPE: VIDEO** (If ANY of these exist):
-- Text "Average watch time"
-- Text "Video analysis"
-- Text "Watched full video"
-- Text "Total play time"
-- A retention graph curve
+### TikTok
+- Read the text: "Most viewers stopped watching at X:XX"
+- If churn point < 0:03 → 🔴 KILL HOOK (TikTok confirms early drop)
 
-## 2. DATA EXTRACTION RULES
-- **OCR Hook Text (CRITICAL):** Look at the thumbnail image (usually at the top). Read the main text/headline overlaid on the image. Field: `hook_text`.
-- **OCR Title:** Look for the caption/description text below the image. Field: `video_title`.
-- **Date Extraction (CRITICAL):** Look strictly BELOW the video thumbnail/preview image for the date.
-  - **TikTok:** Extract date and time (format usually "MM-DD HH:MM"). Field: `posted_at`.
-  - **Instagram:** Extract date (usually "Month DD"). Field: `posted_at`.
-- **Hook Type Classification (by word count):** 
-  After extracting `hook_text`, COUNT THE WORDS and assign `hook_type` STRICTLY by these rules:
-  - **Short Hook:** 1-12 words (Goal: Stop Scroll). Assign: "short"
-  - **Medium Hook:** 13-30 words (Goal: Curiosity Gap). Assign: "medium"
-  - **Long Hook:** 31+ words (Goal: Storytelling). Assign: "long"
-  Field: `hook_type`
-- **Average Watch Time (TikTok Fix):** Look specifically for the text block "On average, viewers watched **X%** of your video" inside the Retention section. If found, extract the percentage value. Field: `avg_watch_time_pct`.
-- **Carousel Retention (Analog):** For CAROUSEL content ONLY — analyze the retention graph. Estimate the percentage of users who reached the **3rd slide/photo**. Field: `retention_3s` (use this field as analog to video's 3-second retention).
-- **Carousel Avg Watch Time Calculation:** Do NOT look for time-based watch time (e.g. seconds) for carousels. Instead, look for the **'Photos viewed'** metric (pattern: 'X / Y', e.g., '2.5 / 5' or '3 / 6').
-  1. Extract these numbers.
-  2. Calculate the percentage: `(Photos Viewed / Total Photos) * 100`.
-  3. Write this percentage value into the JSON field `avg_watch_time_pct`.
-  Example: If '2.5 / 5' is found -> write `50` in `avg_watch_time_pct`.
-- **Metrics:** Extract all visible numbers. If a metric is missing (e.g., retention on a carousel), set to `null`.
-- **Calculated Rates:** Always calculate `aggregated_er = (likes + comments + shares + saves) / views * 100`.
+### YouTube Shorts
+- Read "How viewers engaged" → Viewed % vs Swiped away %
+- Viewed % benchmarks: FAIL < 50%, OK 50–70%, VIRAL > 70%
+- If Viewed < 50% → 🔴 KILL FIRST FRAME. 50%+ swiped away instantly.
 
-## 3. BENCHMARKS & SCORING
+## METRICS BIBLE
 
-### MODE A: VIDEO SCORING
-*Focus: Attention span & Hooks.*
-- **Retention (3s):** <55% (FAIL), 55-70% (OK), >70% (GOOD).
-- **Avg Watch Time:** <3s (FAIL), 3-5s (OK), >6s (EXCELLENT).
-- **Verdict Logic:**
-  - If Retention 3s < 55% -> 🔴 KILL HOOK
-  - If Retention OK but Avg Watch Time Low -> ✂️ FIX BODY
-  - If High Retention + Low Views -> 🟡 ITERATE
+### TIER 1 — GATEKEEPER (Critical Foundation)
+If these fail → video is dead. No amount of engagement saves bad retention.
 
-### MODE B: CAROUSEL SCORING
-*Focus: Depth & Engagement Intensity.*
+**3-Second Retention (Hook)**:
+| Rating     | Benchmark         |
+|------------|-------------------|
+| FAIL       | < 58%             |
+| BORDERLINE | 58–60% (Survival) |
+| GOOD       | 60–70% (Healthy)  |
+| SCALE      | > 70% (Viral Potential) |
+→ If FAIL: 🔴 KILL HOOK. Audience scrolled instantly.
 
-**1. Completion / Swipe-Through (Photos Viewed / Total):**
-- Formula: `photos_viewed / total_photos`
-- **FAIL (Kill):** < 45% (Cover/First slides failed)
-- **OK (Iterate):** 45% – 65%
-- **GREAT (Scale):** >= 65% (Strong UGC target)
+**Completion Rate** (duration-dependent):
+| Duration     | FAIL   | OK           | EXCELLENT       |
+|--------------|--------|--------------|-----------------|
+| 0–10s        | < 60%  | 60–80%       | > 90% (Viral)   |
+| 11–20s       | < 40%  | 45–60%       | > 65% (Viral)   |
+| 21s+         | < 30%  | 40–50%       | > 55%           |
+→ If FAIL: ✂️ FIX BODY. Pacing too slow.
 
-**2. Engagement Rate (ER View):**
-- Formula: `(likes + comments + shares + saves) / views`
-- **FAIL (Kill):** < 3%
-- **OK (Iterate):** 3% – 6%
-- **GREAT (Scale):** >= 6% (8-10% is Top Tier)
+**Average Watch Time %** (duration-dependent):
+| Duration     | FAIL         | OK             | GREAT                  |
+|--------------|--------------|----------------|------------------------|
+| 0–12s        | < 75%        | 75–95%         | ≥ 100% (Loop/Viral)    |
+| 13–20s       | < 60%        | 60–80%         | > 80% (High Retention) |
+→ If FAIL: 🔴 KILL / SHORTEN. Content is dragging.
 
-**3. Viral Potential (Share + Save Rate):**
-- Formula: `(shares + saves) / views`
-- **FAIL (Kill):** < 2.5%
-- **OK (Iterate):** 3% – 6%
-- **GREAT (Scale):** >= 6% (Viral Zone for app content)
+### TIER 2 — GROWTH ENGINE (Virality Signals)
+Determines "Hit" vs "Norm".
+- Norm Zone: 2k–5k views. Survival, good enough to iterate.
+- Scale Zone: 20k–100k+. Requires green metrics.
 
-**4. Discussion Depth (Comment Share):**
-- Formula: `comments / (likes + comments + shares + saves)`
-- **FAIL (Kill):** < 5%
-- **OK (Iterate):** 5% – 15%
-- **GREAT (Scale):** >= 15% (Target for strong product interest)
+**Condition A: High Volume (≥ 3000 views OR 5× spike)**:
+| Metric       | OK (Survival)    | VIRAL (Scale)      |
+|--------------|------------------|--------------------|
+| Share Rate   | 0.5–1.0%         | > 1.5% (SCALE!) — HIGHEST PRIORITY (Free Traffic) |
+| Save Rate    | 0.5–1.0%         | > 1.5%             |
+| Comment Rate | 0.1–0.4%         | > 0.5% (High Resonance) |
 
-**5. Time Efficiency (AVD Ratio):**
-- *If Avg Watch Time available:* Compare to (Total Slides * 3.5s).
-- **FAIL:** < 0.4
-- **OK:** 0.4 – 0.65
-- **GREAT:** >= 0.65
+**Condition B: Low Volume (< 3000 views)**:
+| Aggregated ER | Rating     |
+|---------------|------------|
+| < 6%          | FAIL       |
+| 6–10%         | OK         |
+| > 10%         | HIDDEN GEM |
 
-**Verdict Logic (Carousel):**
-- If Completion < 45% -> 🔴 KILL HOOK (Cover failed)
-- If Share+Save Rate >= 6% -> 🚀 SCALE HARD (High Value)
-- If ER < 3% but Completion OK -> ✂️ FIX VALUE (Add CTA)
-- If Comment Share >= 15% -> 🟢 ITERATE (High Interest)
+## EXPERT HEURISTICS (Advanced Rules)
+**STRICT**: Never praise low-retention content.
 
-## 4. OUTPUT FORMAT
-Respond with a JSON Array (list[dict]), where each object represents one video analysis. Structure of objects remains the same as before. No markdown, no conversation.
+1. **"Platinum Retention" Trap**
+   - Condition: Retention_3s > 65% AND Completion > 40% AND Aggregated_ER < 3%
+   - Interpretation: High quality passive watching. Conversion failure, not content failure.
+   - Action: 🟡 ITERATE. Add aggressive CTA.
 
-[
-  {
-    "content_type": "video" | "carousel",
-    "hook_text": "<text found on the thumbnail image>",
-    "hook_type": "short" | "medium" | "long",
-    "video_title": "<caption text or null>",
-    "posted_at": "<extracted date string or null>",
-    "platform": "tiktok" | "instagram" | "youtube" | "other",
-    "metrics": {
-      "views": <number>,
-      "likes": <number>,
-      "comments": <number>,
-      "shares": <number>,
-      "saves": <number>,
-      "retention_3s": <number_pct or null>,
-      "avg_watch_time_sec": <number or null>,
-      "avg_watch_time_pct": <number_pct or null>,
-      "photos_viewed": <number or null>,
-      "total_photos": <number or null>
-    },
-    "score": <0-100>,
-    "verdict": "🔴 KILL HOOK" | "✂️ FIX BODY" | "🟡 ITERATE" | "🚀 SCALE HARD",
-    "analysis": "<Short analysis in Russian. Explain WHY based on the content type metrics.>",
-    "recommendations": ["<Actionable tip 1>", "<Actionable tip 2>"]
-  }
-]
+2. **"Failed Breakout" (BS Filter)**
+   - Condition: Views > 5× Average BUT Retention_3s < 58%
+   - Interpretation: Algorithm gave a chance, content failed to hold attention.
+   - Action: 🔴 KILL. Do not iterate.
+
+3. **"Gold Format" Candidate**
+   - Condition: Retention_3s in "Good" zone AND Share_Rate in "OK" zone
+   - Interpretation: Stable performer (Workhorse). 20k–50k views potential.
+   - Action: 🟡 ITERATE / LOCK FORMAT.
+
+## DECISION TREE (Priority Order)
+0. Platform Specifics → If YouTube "Viewed" < 50% OR TikTok "Stopped at" < 0:03 → 🔴 KILL IMMEDIATELY
+1. Retention_3s < 58% → 🔴 KILL HOOK
+2. Completion_Rate → Check against duration benchmark → If FAIL → ✂️ FIX BODY
+3. Views < 3000 + Retention > 65% + Low ER → 🟡 ITERATE (Add CTA) — Platinum Trap
+4. Retention "Good" + Share Rate "OK" (0.5–1.0%) → 🟡 ITERATE / POTENTIAL GOLD FORMAT
+5. Views ≥ 3000 (or Spike) + Share Rate > 1.5% → 🚀 SCALE HARD
+
+## MULTI-IMAGE INSTRUCTIONS
+- You will receive TWO images per video.
+- Image 1: Overview Metrics (engagement numbers, views, etc.)
+- Image 2: Retention Graph (audience retention visualization)
+- Combine data from BOTH images to build the complete analysis.
+- Extract the visible text/headline from the video screenshot to name the video. Return it in the JSON field 'video_title'.
+- Detect platform (tiktok/reels) automatically from UI icons and colors.
+
+## OUTPUT FORMAT
+Respond ONLY with valid JSON (no markdown fences, no extra text). Use this exact structure:
+
+{
+  "video_title": "<extracted video title/headline from screenshot or null>",
+  "platform": "tiktok" | "youtube_shorts" | "reels" | "other",
+  "video_duration_sec": <number or null>,
+  "metrics": {
+    "views": <number>,
+    "likes": <number>,
+    "comments": <number>,
+    "shares": <number>,
+    "saves": <number>,
+    "retention_3s": <percentage as number or null>,
+    "completion_rate": <percentage as number or null>,
+    "avg_watch_time_pct": <percentage as number or null>,
+    "viewed_pct": <YouTube Shorts: percentage or null>,
+    "tiktok_churn_point": <string like "0:03" or null>
+  },
+  "calculated_rates": {
+    "share_rate": <number or null>,
+    "save_rate": <number or null>,
+    "comment_rate": <number or null>,
+    "aggregated_er": <number or null>
+  },
+  "tier_1_analysis": {
+    "hook_3s": {"value": <number or null>, "rating": "FAIL|BORDERLINE|GOOD|SCALE", "note": "<short note>"},
+    "completion": {"value": <number or null>, "rating": "FAIL|OK|EXCELLENT", "duration_bracket": "ultra_short|standard_short|long", "note": "<short note>"},
+    "avg_watch_time": {"value": <number or null>, "rating": "FAIL|OK|GREAT", "note": "<short note>"}
+  },
+  "tier_2_analysis": {
+    "volume_condition": "high_volume" | "low_volume",
+    "share_rate": {"value": <number or null>, "rating": "OK|VIRAL|LOW"},
+    "save_rate": {"value": <number or null>, "rating": "OK|HIGH_VALUE|LOW"},
+    "comment_rate": {"value": <number or null>, "rating": "OK|EXCELLENT|LOW"},
+    "aggregated_er": {"value": <number or null>, "rating": "FAIL|OK|HIDDEN_GEM"}
+  },
+  "expert_heuristics": [<list of triggered heuristic names, e.g. "Platinum Retention Trap">],
+  "verdict": "🔴 KILL HOOK" | "🔴 KILL FIRST FRAME" | "✂️ FIX BODY" | "🟡 ITERATE" | "🟡 ITERATE / LOCK FORMAT" | "🚀 SCALE HARD",
+  "score": <0-100 overall score>,
+  "analysis": "<detailed 3-5 sentence analysis in user's language with specific actionable recommendations>",
+  "recommendations": ["<recommendation 1>", "<recommendation 2>", "<recommendation 3>"]
+}
+
+IMPORTANT RULES:
+- Calculate rates: share_rate = shares/views*100, save_rate = saves/views*100, etc.
+- If a metric is not visible on the screenshot, use null (do NOT guess).
+- Score formula: weighted composite 0-100 based on tier_1 (60% weight) and tier_2 (40% weight).
+- Be BRUTALLY honest. Data over feelings.
+- Give SPECIFIC, ACTIONABLE recommendations (not generic advice).
+- If you see a retention/engagement graph, describe what you observe in the notes.
 """
 
-USER_PROMPT = """Analyze these screenshots.
-Current Date: {current_time_str}
+USER_PROMPT = """Analyze the provided images of video metrics/analytics.
 
-**Tasks:**
-1. Determine `content_type` (Video vs Carousel) based on UI markers ("Video analysis" vs "Post analysis").
-2. Extract `hook_text` strictly from the image thumbnail.
-3. Extract `video_title` from the caption.
-4. Fill all metrics.
-5. Provide a verdict based on the specific logic for that content type.
+You will receive TWO images:
+1. Overview Metrics: engagement numbers, views, etc.
+2. Retention Graph: audience retention visualization
 
-Return ONLY JSON.
+Extract ALL visible numbers, graphs, and data points from BOTH images. Apply the full Metrics Bible benchmarks.
+Follow the Decision Tree to arrive at the final verdict.
+
+Rules:
+- Identify the platform from the UI (TikTok / YouTube Shorts / Reels) - detect automatically from icons and colors.
+- Extract the visible text/headline from the video screenshot as 'video_title'.
+- Read retention and engagement graphs if visible.
+- Calculate engagement rates from raw numbers (share_rate = shares/views*100, etc.).
+- Apply expert heuristics if conditions match.
+- If the images do NOT show analytics (no views, no metrics, wrong content), still respond with valid JSON: set "platform" to "other", set "video_title" to null, use null for missing metrics, verdict "🟡 ITERATE", and in "analysis" briefly state what you see (e.g. "Screenshot does not show video analytics.").
+
+Output: reply with ONLY the JSON object. No text before or after, no markdown code fences, no explanation—just the single JSON object starting with { and ending with }.
 """
 
 
 def _extract_json_object(text: str) -> str | None:
-    """Находит первый полный JSON-объект { ... } в тексте."""
+    """Находит первый полный JSON-объект { ... } в тексте (по скобкам)."""
     start = text.find("{")
     if start == -1:
         return None
@@ -210,74 +251,65 @@ def _extract_json_object(text: str) -> str | None:
     return None
 
 
-def _parse_response(text: str) -> list[dict[str, Any]] | None:
-    """Извлекает и валидирует JSON массив из ответа."""
-    if not text:
+def _parse_response(text: str) -> dict[str, Any] | None:
+    """Извлекает JSON из ответа (убирает markdown-обёртку, ищет объект в тексте)."""
+    if not text or not text.strip():
         return None
-
-    parsed = None
-
-    # Попытка 1: Прямой парсинг
+    text = text.strip()
+    if text.startswith("\ufeff"):
+        text = text[1:].strip()
     try:
-        parsed = json.loads(text)
+        return json.loads(text)
     except json.JSONDecodeError:
         pass
-
-    # Попытка 2: Извлечение из Markdown ```json ... ```
-    if parsed is None and "```" in text:
+    if "```" in text:
         lines = text.split("\n")
-        out = []
+        out: list[str] = []
         in_block = False
         for line in lines:
-            if "```" in line:
+            if line.strip().startswith("```"):
                 in_block = not in_block
-                continue
+                if in_block:
+                    continue
+                break
             if in_block:
                 out.append(line)
         if out:
             try:
-                parsed = json.loads("\n".join(out))
+                return json.loads("\n".join(out))
             except json.JSONDecodeError:
                 pass
-
-    # Попытка 3: Поиск по скобкам
-    if parsed is None:
-        extracted = _extract_json_object(text)
-        if extracted:
-            try:
-                parsed = json.loads(extracted)
-            except json.JSONDecodeError:
-                pass
-
-    if parsed is None:
-        logger.error("Failed to parse JSON response. Raw length: %d", len(text))
-        return None
-
-    # Если AI вернул одиночный словарь, оборачиваем в список
-    if isinstance(parsed, dict):
-        return [parsed]
-    elif isinstance(parsed, list):
-        return parsed
-    else:
-        logger.error("Unexpected JSON type: %s", type(parsed))
-        return None
+    extracted = _extract_json_object(text)
+    if extracted:
+        try:
+            return json.loads(extracted)
+        except json.JSONDecodeError as e:
+            logger.warning("JSON from extracted block failed: %s", e)
+    logger.warning("Failed to parse OpenRouter JSON. Raw (first 600 chars): %s", text[:600])
+    return None
 
 
 def analyze_screenshot(
     images_list: list[bytes],
     mime_type: str = "image/jpeg",
-) -> tuple[list[dict[str, Any]] | None, str | None]:
+) -> tuple[dict[str, Any] | None, str | None]:
     """
-    Отправляет скриншоты в OpenRouter.
-    Возвращает список результатов анализа (один результат на каждое уникальное видео).
+    Отправляет скриншоты в OpenRouter (Gemini 3 Flash, thinking medium).
+
+    Args:
+        images_list: Список байтов изображений (2 изображения: [Overview Metrics, Retention Graph]).
+        mime_type: MIME-тип изображений (по умолчанию image/jpeg).
+
+    Returns:
+        Tuple (parsed_result, raw_response_text).
+        parsed_result: распарсенный JSON или None.
+        raw_response_text: сырой текст ответа для дебага.
     """
     model = (config.OPENROUTER_MODEL or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     api_key = config.OPENROUTER_API_KEY
 
-    current_time_str = datetime.now(ZoneInfo("Europe/Minsk")).strftime("%Y-%m-%d %H:%M:%S GMT+3")
-    user_prompt_formatted = USER_PROMPT.format(current_time_str=current_time_str)
-
-    content: list[dict[str, Any]] = [{"type": "text", "text": user_prompt_formatted}]
+    # Build content array with text prompt and all images
+    content: list[dict[str, Any]] = [{"type": "text", "text": USER_PROMPT}]
 
     for image_bytes in images_list:
         b64 = base64.standard_b64encode(image_bytes).decode("ascii")
@@ -286,14 +318,17 @@ def analyze_screenshot(
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": content},
+        {
+            "role": "user",
+            "content": content,
+        },
     ]
 
     payload = {
         "model": model,
         "messages": messages,
-        "max_tokens": 4096,
-        "reasoning": {"effort": "medium"}, # Включаем thinking для сложных кейсов
+        "max_tokens": 8192,
+        "reasoning": {"effort": "medium"},
     }
 
     headers = {
@@ -307,25 +342,28 @@ def analyze_screenshot(
             OPENROUTER_URL,
             json=payload,
             headers=headers,
-            timeout=120,  # Увеличенный таймаут для batch processing
+            timeout=120,
         )
         resp.raise_for_status()
-
         data = resp.json()
-        choice = data.get("choices", [])[0]
-        raw_text = choice.get("message", {}).get("content", "")
 
-        parsed_list = _parse_response(raw_text)
+        choices = data.get("choices") or []
+        if not choices:
+            logger.warning("OpenRouter returned no choices")
+            return None, None
 
-        # Пост-процессинг для каждого результата в списке
-        if parsed_list:
-            for parsed in parsed_list:
-                # Fallback для video_title, если OCR не сработал, но есть hook_text
-                if not parsed.get("video_title") and parsed.get("hook_text"):
-                    parsed["video_title"] = parsed["hook_text"]
+        msg = choices[0].get("message") or {}
+        raw_text = (msg.get("content") or "").strip()
+        if not raw_text:
+            logger.warning("OpenRouter empty content in message")
+            return None, None
 
-        return parsed_list, raw_text
+        parsed = _parse_response(raw_text)
+        return parsed, raw_text
 
-    except Exception as e:
-        logger.exception("AI Analysis failed: %s", e)
+    except requests.RequestException as e:
+        logger.exception("OpenRouter request failed: %s", e)
+        return None, None
+    except (KeyError, TypeError, ValueError) as e:
+        logger.exception("OpenRouter response parse failed: %s", e)
         return None, None
