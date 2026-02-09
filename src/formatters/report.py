@@ -130,6 +130,19 @@ def format_report(data: dict[str, Any]) -> str:
         lines.append(" | ".join(metric_parts))
         lines.append("")
 
+    # Scorecard: разбивка баллов
+    detailed_analysis = data.get("detailed_analysis") or {}
+    score_breakdown = detailed_analysis.get("score_breakdown") or data.get("score_breakdown") or {}
+    if score_breakdown:
+        hook_points = score_breakdown.get("hook_points", 0)
+        body_points = score_breakdown.get("body_points", 0)
+        viral_points = score_breakdown.get("viral_points", 0)
+        depth_points = score_breakdown.get("depth_points", 0)
+        lines.append("<b>Scorecard:</b>")
+        lines.append(f"  🎣 Hook: {hook_points}/30  📺 Body: {body_points}/30")
+        lines.append(f"  🔄 Viral: {viral_points}/20  💬 Depth: {depth_points}/20")
+        lines.append("")
+
     # Tier 1: Основные метрики с бенчмарками
     if tier_1:
         lines.append("<b>Основные метрики:</b>")

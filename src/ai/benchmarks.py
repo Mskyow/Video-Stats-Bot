@@ -111,5 +111,51 @@ BENCHMARKS_CONTEXT = {
         "priority_2": "If Completion Rate < Dynamic_Benchmark -> ✂️ FIX BODY (PACING)",
         "priority_3": "If Views >= 3000 AND Share Rate > 1.5% -> 🚀 SCALE HARD",
         "priority_4": "If Views < 3000 AND ER > 10% -> 💎 HIDDEN GEM (DO NOT DELETE)"
+    },
+    "scoring_model": {
+        "max_score": 100,
+        "components": {
+            "tier_1_hook": {
+                "weight": 30,
+                "metric": "Retention 3s",
+                "rules": {
+                    "fail": 0,
+                    "borderline": 15,
+                    "good": 25,
+                    "scale": 30
+                }
+            },
+            "tier_1_body": {
+                "weight": 30,
+                "metric": "Completion Rate OR Avg Watch Time (Best of)",
+                "rules": {
+                    "fail": 5,
+                    "ok": 20,
+                    "excellent": 30
+                }
+            },
+            "tier_2_viral": {
+                "weight": 20,
+                "metric": "Share Rate",
+                "rules": {
+                    "low": 0,
+                    "ok": 10,
+                    "viral": 20
+                }
+            },
+            "tier_2_depth": {
+                "weight": 20,
+                "metric": "Engagement Depth (Saves + Comments)",
+                "rules": {
+                    "low": 5,
+                    "ok": 15,
+                    "high_value": 20
+                }
+            }
+        },
+        "penalties": {
+            "platinum_trap": -10,
+            "marketing_hook": -10
+        }
     }
 }

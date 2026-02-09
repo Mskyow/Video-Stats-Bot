@@ -229,6 +229,7 @@ def insert_video(
         detailed = {
             "tier_1": tier_1,
             "tier_2": tier_2,
+            "score_breakdown": result.get("score_breakdown") or {},
             "expert_heuristics": result.get("expert_heuristics") or [],
             "recommendations": result.get("recommendations") or [],
         }
