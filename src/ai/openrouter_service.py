@@ -55,6 +55,17 @@ Look at the UI elements to determine `content_type`:
 ## 2. DATA EXTRACTION RULES
 - **OCR Hook Text (CRITICAL):** Look at the thumbnail image (usually at the top). Read the main text/headline overlaid on the image. Field: `hook_text`.
 - **OCR Title:** Look for the caption/description text below the image. Field: `video_title`.
+- **Date Extraction (CRITICAL):** Look strictly BELOW the video thumbnail/preview image for the date.
+  - **TikTok:** Extract date and time (format usually "MM-DD HH:MM"). Field: `posted_at`.
+  - **Instagram:** Extract date (usually "Month DD"). Field: `posted_at`.
+- **Hook Type Classification (by word count):** 
+  After extracting `hook_text`, COUNT THE WORDS and assign `hook_type` STRICTLY by these rules:
+  - **Short Hook:** 1-12 words (Goal: Stop Scroll). Assign: "short"
+  - **Medium Hook:** 13-30 words (Goal: Curiosity Gap). Assign: "medium"
+  - **Long Hook:** 31+ words (Goal: Storytelling). Assign: "long"
+  Field: `hook_type`
+- **Average Watch Time (TikTok Fix):** Look specifically for the text block "On average, viewers watched **X%** of your video" inside the Retention section. If found, extract the percentage value. Field: `avg_watch_time_pct`.
+- **Carousel Retention (Analog):** For CAROUSEL content ONLY — analyze the retention graph. Estimate the percentage of users who reached the **3rd slide/photo**. Field: `retention_3s` (use this field as analog to video's 3-second retention).
 - **Metrics:** Extract all visible numbers. If a metric is missing (e.g., retention on a carousel), set to `null`.
 - **Calculated Rates:** Always calculate `aggregated_er = (likes + comments + shares + saves) / views * 100`.
 
@@ -114,7 +125,9 @@ Respond with this exact JSON structure. No markdown, no conversation.
 {
   "content_type": "video" | "carousel",
   "hook_text": "<text found on the thumbnail image>",
+  "hook_type": "short" | "medium" | "long",
   "video_title": "<caption text or null>",
+  "posted_at": "<extracted date string or null>",
   "platform": "tiktok" | "instagram" | "youtube" | "other",
   "metrics": {
     "views": <number>,
@@ -124,6 +137,7 @@ Respond with this exact JSON structure. No markdown, no conversation.
     "saves": <number>,
     "retention_3s": <number_pct or null>,
     "avg_watch_time_sec": <number or null>,
+    "avg_watch_time_pct": <number_pct or null>,
     "photos_viewed": <number or null>,
     "total_photos": <number or null>
   },

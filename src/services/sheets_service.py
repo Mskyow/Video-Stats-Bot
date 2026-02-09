@@ -110,18 +110,19 @@ def _sync_export_to_sheet(video_data: dict[str, Any]) -> bool:
     Колонки (Strict Order):
     - Col A: Processed At (Current Timestamp)
     - Col B: Posted At (Normalized date from AI)
-    - Col C: Age (Hours) (Calculated from posted_at)
-    - Col D: Platform (TikTok/Reels)
-    - Col E: Video Title (OCR)
-    - Col F: Hook Type (Short/Medium/Long)
-    - Col G: Score (0-100)
-    - Col H: Verdict (KILL/ITERATE/SCALE)
-    - Col I: Views (Raw Int)
-    - Col J: Likes (Raw Int)
-    - Col K: Shares (Raw Int)
-    - Col L: Retention 3s (Raw %)
-    - Col M: Avg Watch Time (Raw)
-    - Col N: Engagement Rate (%)
+    - Col C: Content Type (Video / Carousel)
+    - Col D: Age (Hours) (Calculated from posted_at)
+    - Col E: Platform (TikTok/Reels)
+    - Col F: Video Title (OCR)
+    - Col G: Hook Type (Short/Medium/Long)
+    - Col H: Score (0-100)
+    - Col I: Verdict (KILL/ITERATE/SCALE)
+    - Col J: Views (Raw Int)
+    - Col K: Likes (Raw Int)
+    - Col L: Shares (Raw Int)
+    - Col M: Retention 3s (Raw %)
+    - Col N: Avg Watch Time (Raw %)
+    - Col O: Engagement Rate (%)
 
     Args:
         video_data: Словарь с результатами анализа AI.
@@ -144,12 +145,19 @@ def _sync_export_to_sheet(video_data: dict[str, Any]) -> bool:
         processed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         processed_at_dt = datetime.now()
 
-        # B: Posted At (normalized date from AI)
+        # B: Posted At (normalized date from AI - записываем "как есть")
         posted_at = video_data.get("posted_at")
         if not posted_at:
             posted_at = "Not Found"
 
-        # C: Age (Hours) - расчет из posted_at
+        # C: Content Type (Video / Carousel)
+        content_type = video_data.get("content_type")
+        if content_type == "carousel":
+            content_type_val = "Carousel"
+        else:
+            content_type_val = "Video"
+
+        # D: Age (Hours) - расчет из posted_at
         age_hours_val = "Not Found"
         if posted_at and posted_at != "Not Found":
             try:
@@ -164,19 +172,14 @@ def _sync_export_to_sheet(video_data: dict[str, Any]) -> bool:
 
         metrics = video_data.get("metrics") or {}
 
-        # D: Platform
+        # E: Platform
         platform = video_data.get("platform")
         if platform:
              platform = str(platform).capitalize()
         else:
              platform = "Not Recognized"
 
-        # Add "(Carousel)" label if content_type is "carousel"
-        content_type = video_data.get("content_type")
-        if content_type == "carousel":
-            platform = f"{platform} (Carousel)"
-
-        # E: Video Title - use hook_text if available, otherwise fall back to title
+        # F: Video Title - use hook_text if available, otherwise fall back to title
         hook_text = video_data.get("hook_text")
         if hook_text and hook_text.strip():
             video_title = hook_text.strip()
@@ -185,37 +188,37 @@ def _sync_export_to_sheet(video_data: dict[str, Any]) -> bool:
             if not video_title:
                 video_title = "Not Found"
 
-        # E: Hook Type
+        # G: Hook Type
         hook_type = video_data.get("hook_type")
         if not hook_type:
             hook_type = "Not Found"
 
-        # F: Score
+        # H: Score
         score = video_data.get("score")
         if score is None:
             score = 0
 
-        # G: Verdict
+        # I: Verdict
         verdict = video_data.get("verdict")
         if not verdict:
             verdict = "Not Found"
 
-        # H: Views
+        # J: Views
         views = metrics.get("views")
         if views is None:
             views = "Not Found"
 
-        # I: Likes
+        # K: Likes
         likes = metrics.get("likes")
         if likes is None:
             likes = "Not Found"
 
-        # J: Shares
+        # L: Shares
         shares = metrics.get("shares")
         if shares is None:
             shares = "Not Found"
 
-        # K: Retention 3s
+        # M: Retention 3s
         retention_3s = metrics.get("retention_3s")
         # Fallback to tier_1 if missing in metrics
         if retention_3s is None:
@@ -225,12 +228,12 @@ def _sync_export_to_sheet(video_data: dict[str, Any]) -> bool:
 
         retention_3s_val = f"{retention_3s}%" if retention_3s is not None else "Not Found"
 
-        # L: Avg Watch Time
-        # Looking for avg_watch_time_pct in metrics
+        # N: Avg Watch Time (%)
+        # Приоритет: avg_watch_time_pct из metrics
         avg_watch_time = metrics.get("avg_watch_time_pct")
         avg_watch_time_val = f"{avg_watch_time}%" if avg_watch_time is not None else "Not Found"
 
-        # N: Engagement Rate (%)
+        # O: Engagement Rate (%)
         er_val = "Not Found"
         calculated_rates = video_data.get("calculated_rates") or {}
         aggregated_er = calculated_rates.get("aggregated_er")
@@ -249,22 +252,23 @@ def _sync_export_to_sheet(video_data: dict[str, Any]) -> bool:
                 er = (likes_num + shares_num + comments_num + saves_num) / views_num * 100
                 er_val = f"{er:.1f}%"
 
-        # Формируем строку
+        # Формируем строку (обновленный порядок колонок)
         row = [
-            processed_at,       # A
-            posted_at,          # B
-            age_hours_val,      # C
-            platform,           # D
-            video_title,        # E
-            hook_type,          # F
-            score,              # G
-            verdict,            # H
-            views,              # I
-            likes,              # J
-            shares,             # K
-            retention_3s_val,   # L
-            avg_watch_time_val, # M
-            er_val              # N
+            processed_at,       # A: Processed At
+            posted_at,          # B: Posted At
+            content_type_val,   # C: Content Type (Video / Carousel)
+            age_hours_val,      # D: Age (Hours)
+            platform,           # E: Platform
+            video_title,        # F: Video Title / Hook Text
+            hook_type,          # G: Hook Type
+            score,              # H: Score
+            verdict,            # I: Verdict
+            views,              # J: Views
+            likes,              # K: Likes
+            shares,             # L: Shares
+            retention_3s_val,   # M: Retention 3s
+            avg_watch_time_val, # N: Avg Watch Time (%)
+            er_val              # O: Engagement Rate (%)
         ]
 
         # Отправка в Google Sheets
