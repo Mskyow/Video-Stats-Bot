@@ -196,7 +196,16 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
                 success=False,
                 error_message="⚠️ AI не смог распознать метрики."
             )
-            
+
+        # Проверка на несоответствие контента (разные видео в скриншотах)
+        if result_json.get("error") == "content_mismatch":
+            reason = result_json.get("reason", "Неизвестная причина")
+            return VideoProcessingResult(
+                index=index,
+                success=False,
+                error_message=f"⛔️ Скриншоты не совпадают!\nAI считает, что это разные видео: {reason}"
+            )
+
         # Успешный анализ
         title = result_json.get("video_title") or f"Video #{index}"
         score = result_json.get("score", 0)
