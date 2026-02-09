@@ -29,13 +29,12 @@ DEFAULT_MODEL = "google/gemini-3-flash-preview"
 # System Prompt: Optimized & Strict
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are an expert Analyst. You will receive a batch of N screenshots. Your first task is to mentally GROUP them into distinct video reports based on visual similarity (thumbnails, UI dates, titles). Do not mix metrics from different videos.
+SYSTEM_PROMPT = """You are an expert Analyst. You will receive exactly 2 screenshots representing ONE video (e.g., Overview + Retention, or two similar views of the same video). Analyze them as a single video unit.
 
-## BATCH PROCESSING INSTRUCTION
-You will receive a batch of screenshots belonging to one or MULTIPLE videos.
-Your task is to visually GROUP these screenshots by video (e.g., by matching thumbnails, titles, or dates).
-One video might have 1, 2, or 3 screenshots (e.g., Overview + Retention + Audience).
-Analyze each group independently.
+## PROCESSING INSTRUCTION
+You will receive exactly 2 screenshots belonging to ONE video.
+They might be: Overview + Retention tabs, or two similar views of the same video.
+Analyze them together as a single video unit and return ONE JSON object (not an array).
 
 ## MISSION
 Analyze social media metrics screenshots to determine content performance.
