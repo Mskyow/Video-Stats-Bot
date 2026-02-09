@@ -17,7 +17,7 @@ from src.ai.openrouter_service import analyze_screenshot
 from src.config import GOOGLE_SHEET_ID
 from src.db.repositories.videos import insert_video
 from src.db.supabase_client import get_supabase
-from src.services.sheets_service import export_hook_to_sheet
+from src.services.sheets_service import queue_export
 
 router = Router(name="image")
 logger = logging.getLogger(__name__)
@@ -129,13 +129,9 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
                         res.raw_response,
                     )
                 
-                # Экспорт в Google Sheets (если Score > Threshold, но тут сохраняем все успешные)
-                # Логика фильтрации может быть внутри export_hook_to_sheet или здесь.
-                # По ТЗ: "Если score > threshold, save to Google Sheets" - проверим score.
-                # Но обычно export_hook_to_sheet сама решает или сохраняем всё. 
-                # Предположим, сохраняем всё успешное, а сервис сам решит.
+                # Экспорт в Google Sheets через очередь (асинхронно)
                 if GOOGLE_SHEET_ID:
-                    await asyncio.to_thread(export_hook_to_sheet, res.ai_result)
+                    queue_export(res.ai_result)
                 
                 saved_count += 1
             except Exception as e:

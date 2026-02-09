@@ -4,9 +4,11 @@
 Функционал:
 - Авторизация через Service Account.
 - Экспорт всех хуков в существующую таблицу (без фильтрации по score).
+- Асинхронный background worker для обработки очереди экспорта.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date
 from pathlib import Path
@@ -22,6 +24,55 @@ from src.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Очередь для экспорта данных в Google Sheets
+_sheets_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+
+def queue_export(video_data: dict[str, Any]) -> None:
+    """
+    Добавляет данные видео в очередь для экспорта в Google Sheets.
+
+    Args:
+        video_data: Словарь с данными видео для экспорта.
+    """
+    try:
+        _sheets_queue.put_nowait(video_data)
+        logger.debug("Queued video for sheets export: %s", video_data.get("title", "Unknown"))
+    except asyncio.QueueFull:
+        logger.warning("Sheets export queue is full, dropping video: %s", video_data.get("title", "Unknown"))
+
+
+async def sheets_worker() -> None:
+    """
+    Background worker для асинхронного экспорта данных в Google Sheets.
+
+    Обрабатывает очередь _sheets_queue и вызывает export_hook_to_sheet
+    для каждого элемента в очереди.
+    """
+    logger.info("Sheets worker started")
+    while True:
+        try:
+            video_data = await _sheets_queue.get()
+            logger.debug("Processing video for sheets export: %s", video_data.get("title", "Unknown"))
+
+            # export_hook_to_sheet синхронная, запускаем в executor
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, export_hook_to_sheet, video_data)
+
+            if result:
+                logger.info("Successfully exported to sheets: %s", video_data.get("title", "Unknown"))
+            else:
+                logger.warning("Failed to export to sheets: %s", video_data.get("title", "Unknown"))
+
+            _sheets_queue.task_done()
+        except asyncio.CancelledError:
+            logger.info("Sheets worker cancelled")
+            break
+        except Exception as e:
+            logger.exception("Error in sheets worker: %s", e)
+            # Продолжаем работу даже после ошибки
+            await asyncio.sleep(1)
 
 
 def _get_credentials() -> ServiceAccountCredentials:
