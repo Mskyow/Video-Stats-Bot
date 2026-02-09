@@ -171,8 +171,8 @@ def _sync_export_to_sheet(video_data: dict[str, Any]) -> bool:
         else:
              platform = "Not Recognized"
 
-        # D: Video Title
-        video_title = video_data.get("video_title")
+        # D: Video Title (from AI result - field is named 'title', not 'video_title')
+        video_title = video_data.get("title")
         if not video_title:
             video_title = "Not Found"
 
