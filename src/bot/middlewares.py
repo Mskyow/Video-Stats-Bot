@@ -32,8 +32,8 @@ from src.config import AUTH_SECRET
 logger = logging.getLogger(__name__)
 
 PENDING_MESSAGE = (
-    "🔒 Bot is private.\n\n"
-    "Please send the access code."
+    "❌ У вас нет доступа.\n"
+    "Введите кодовое слово в формате /start КОДОВОЕ_СЛОВО"
 )
 
 ACCESS_GRANTED_MESSAGE = "Доступ разрешён✅"
