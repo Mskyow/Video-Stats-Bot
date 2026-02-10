@@ -10,6 +10,7 @@ supabase>=2.10,<3
 # Utils
 pydantic>=2.9,<3
 python-dotenv>=1.0,<2
+dateparser>=1.2.0
 # Для webhook (опционально)
 aiohttp>=3.9,<4
 
