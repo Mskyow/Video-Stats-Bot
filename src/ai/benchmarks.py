@@ -74,13 +74,6 @@ BENCHMARKS_CONTEXT = {
         }
     },
     "platform_specific_filters": {
-        "youtube_shorts": {
-            "viewed_vs_swiped": {
-                "fail_kill_first_frame": "< 50%",
-                "ok": "50% - 70%",
-                "viral": "> 70%"
-            }
-        },
         "tiktok_insight": {
             "instant_kill_condition": "If 'Most viewers stopped watching at' < 0:03"
         }
@@ -106,7 +99,7 @@ BENCHMARKS_CONTEXT = {
         }
     ],
     "automated_decision_tree": {
-        "priority_0": "If YouTube Viewed < 50% OR TikTok Churn < 3s -> 🔴 KILL IMMEDIATELY",
+        "priority_0": "If TikTok Churn < 3s -> 🔴 KILL IMMEDIATELY",
         "priority_1": "If Retention_3s < 58% -> 🔴 KILL HOOK",
         "priority_2": "If Completion Rate < Dynamic_Benchmark -> ✂️ FIX BODY (PACING)",
         "priority_3": "If Views >= 3000 AND Share Rate > 1.5% -> 🚀 SCALE HARD",

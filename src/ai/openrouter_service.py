@@ -32,7 +32,7 @@ benchmarks_json = json.dumps(BENCHMARKS_CONTEXT, indent=2, ensure_ascii=False)
 JSON_SCHEMA_EXAMPLE = """{
   "video_title": "string|null",
   "posted_at": "string|null",
-  "platform": "tiktok|reels|youtube_shorts|other",
+  "platform": "tiktok|reels|other",
   "content_type": "video|carousel",
   "hook_text": "string|null",
   "hook_type": "short|medium|long",
@@ -86,28 +86,49 @@ SYSTEM_PROMPT = (
     "\n</BENCHMARKS>\n"
     "\n"
     "## 3. ANALYSIS LOGIC\n"
-    "1. **Content Type Detection (CRITICAL):**\n"
-    "   - **CAROUSEL:** If image contains header 'Post analysis', metric 'Photos viewed', or shows a horizontal row of multiple thumbnails.\n"
-    "   - **VIDEO:** If image contains header 'Video analysis', metric 'Video views', or shows a single vertical thumbnail.\n"
-    "2. **Date Extraction (MANDATORY):**\n"
-    "   - Locate text starting with 'Posted on ...' (usually below the thumbnail).\n"
-    "   - Extract the exact date/time string into `posted_at`. NEVER leave null.\n"
-    "3. **Hook Analysis (CRITICAL):**\n"
-    "   - **Source:** ALWAYS OCR the text overlay on the video thumbnail/cover. This is the `hook_text`.\n"
-    "   - **Classification (Strict Word Count):**\n"
-    "     - **SHORT (1-10 words):** 'The Punch'. Immediate shock, single concept. (e.g. 'Caught my wife cheating').\n"
-    "     - **MEDIUM (11-30 words):** 'The Setup'. Establishes Context + Twist. (e.g. 'Surprising my wife with DNA results...').\n"
-    "     - **LONG (30+ words):** 'The Story'. Full narrative arc (Who, What, Where, Why).\n"
-    "5. **Data Extraction:** Extract all visible metrics (views, retention, etc.).\n"
-    "6. **Scoring Algorithm (Deterministic):**\n"
+    "Follow this EXACT order of operations for the analysis:\n"
+    "\n"
+    "1. **Platform Detection:**\n"
+    "   - Identify the social network (TikTok, Instagram) based on UI elements, fonts, and icons.\n"
+    "\n"
+    "2. **Content Type Detection:**\n"
+    "   - **VIDEO:** Look for 'Video analysis', 'Video views', vertical layout.\n"
+    "   - **CAROUSEL:** Look for 'Post analysis', 'Photos viewed', horizontal thumbnails.\n"
+    "\n"
+    "3. **Date Extraction:**\n"
+    "   - Locate 'Posted on ...' text (usually below the thumbnail).\n"
+    "   - Extract the exact date/time string into `posted_at`. MANDATORY.\n"
+    "\n"
+    "4. **Core Metrics Extraction:**\n"
+    "   - Extract: **Views, Likes, Comments, Shares, Saves** from the Overview image.\n"
+    "   - Calculate Rates: Share Rate (Shares/Views), Save Rate (Saves/Views).\n"
+    "\n"
+    "5. **Hook Text Extraction (Primary):**\n"
+    "   - Attempt to OCR text from the **small thumbnail** in the Overview/Metrics image.\n"
+    "   - Assign to `hook_text`.\n"
+    "   - Classify `hook_type` based on word count (Short 1-10, Medium 11-30, Long 30+).\n"
+    "\n"
+    "6. **Retention & Watch Time Analysis:**\n"
+    "   - **Average Watch Time (Percentage):**\n"
+    "     - **TikTok:** Look for 'On average viewers watched **X%**'. Use X directly as `avg_watch_time_pct`.\n"
+    "     - **Instagram:** Look for 'Average watch time' (e.g. 3s, 1m). Calculate percentage: (Average Watch Time / Video Duration) * 100.\n"
+    "     - **Carousel:** Look for 'Photos Viewed' (e.g. 2.1). Calculate: (Photos Viewed / Total Photos) * 100. If total unknown, leave null.\n"
+    "   - **Retention at 3s:**\n"
+    "     - Locate the Retention Graph. Identify the value at the 3-second mark (`retention_3s`).\n"
+    "   - **Hook Text (Secondary/Backup):**\n"
+    "     - **IF** `hook_text` was NOT found in Step 5, try to OCR text from the thumbnail associated with the Retention Graph.\n"
+    "\n"
+    "7. **Scoring Algorithm (Deterministic):**\n"
     '   Calculate the final `score` by summing points strictly according to <BENCHMARKS> -> "scoring_model":\n'
     "   - **Hook Score (max 30):** Determine Hook rating -> Look up points in `scoring_model.tier_1_hook`.\n"
     "   - **Body Score (max 30):** Determine Completion/WatchTime rating -> Look up points in `scoring_model.tier_1_body`.\n"
     "   - **Viral Score (max 20):** Determine Share Rate rating -> Look up points in `scoring_model.tier_2_viral`.\n"
     "   - **Depth Score (max 20):** Determine Save+Comment rating -> Look up points in `scoring_model.tier_2_depth`.\n"
     '   - **Total:** Sum these 4 values. Apply penalties if "platinum_trap" or "marketing_hook" heuristics match.\n'
-    '7. **Heuristics:** Check against "expert_heuristics_logic" in benchmarks.\n'
-    '8. **Decision Tree:** Follow "automated_decision_tree" priority.\n'
+    "\n"
+    '8. **Heuristics & Decision Tree:**\n'
+    '   - Check against "expert_heuristics_logic" in benchmarks.\n'
+    '   - Follow "automated_decision_tree" priority for the final verdict.\n'
     "\n"
     "## 4. OUTPUT SCHEMA\n"
     "Response must be ONLY valid JSON.\n"
@@ -131,7 +152,7 @@ Follow the Decision Tree to arrive at the final verdict.
 Identify if this is a Video or Carousel based on the header ('Video analysis' vs 'Post analysis'). Extract 'Posted on' date strictly. OCR the text on the video thumbnail for `hook_text` and classify its type based on word count.
 
 Rules:
-- Identify the platform from the UI (TikTok / YouTube Shorts / Reels) - detect automatically from icons and colors.
+- Identify the platform from the UI (TikTok / Reels) - detect automatically from icons and colors.
 - Extract the visible text/headline from the video screenshot as 'video_title'.
 - Extract exact posted date/time, it is always located at the bottom of the small video thumbnail (e.g., 'Posted on Feb 6, 2026, 12:51 PM', 'February 6') into 'posted_at'.
 - Read retention and engagement graphs if visible.
