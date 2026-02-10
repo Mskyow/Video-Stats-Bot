@@ -31,6 +31,7 @@ benchmarks_json = json.dumps(BENCHMARKS_CONTEXT, indent=2, ensure_ascii=False)
 # JSON schema example (plain string, not f-string to avoid escaping issues)
 JSON_SCHEMA_EXAMPLE = """{
   "video_title": "string|null",
+  "posted_at": "string|null",
   "platform": "tiktok|reels|youtube_shorts|other",
   "video_duration_sec": number|null,
   "metrics": {
@@ -53,7 +54,7 @@ JSON_SCHEMA_EXAMPLE = """{
   },
   "expert_heuristics": ["List of triggered heuristic names"],
   "verdict": "🔴 KILL | ✂️ FIX | 🟡 ITERATE | 🚀 SCALE",
-  "score": 0-100,
+  "score": "0-10 float",
   "score_breakdown": {
     "hook_points": <number>,
     "body_points": <number>,
@@ -116,6 +117,7 @@ Follow the Decision Tree to arrive at the final verdict.
 Rules:
 - Identify the platform from the UI (TikTok / YouTube Shorts / Reels) - detect automatically from icons and colors.
 - Extract the visible text/headline from the video screenshot as 'video_title'.
+- Extract exact posted date/time if visible (e.g., '2-6', 'Feb 6', '2 days ago') into 'posted_at'.
 - Read retention and engagement graphs if visible.
 - Calculate engagement rates from raw numbers (share_rate = shares/views*100, etc.).
 - Apply expert heuristics if conditions match.

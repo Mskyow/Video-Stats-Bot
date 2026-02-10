@@ -17,6 +17,8 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+import dateparser
+
 if TYPE_CHECKING:
     from supabase import Client
 
@@ -209,21 +211,20 @@ def insert_video(
         if result.get("hook_type"):
             full_metrics["hook_type"] = result.get("hook_type")
 
-        # Calculate video age in hours from posted_at
+        # Calculate video age in hours from posted_at using dateparser
         posted_at_str = result.get("posted_at")
+        age_hours = None
         if posted_at_str:
             try:
-                # Try parsing datetime with time first
-                try:
-                    posted_at_dt = datetime.strptime(posted_at_str, "%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    # Fallback to date-only format (assume start of day)
-                    posted_at_dt = datetime.strptime(posted_at_str, "%Y-%m-%d")
-
-                age_hours = (datetime.utcnow() - posted_at_dt).total_seconds() / 3600
-                full_metrics["age_hours"] = round(age_hours, 1)
+                posted_at_dt = dateparser.parse(posted_at_str)
+                if posted_at_dt:
+                    age_hours = (datetime.utcnow() - posted_at_dt).total_seconds() / 3600
+                    age_hours = round(age_hours, 1)
+                else:
+                    logger.warning("Failed to parse posted_at '%s' with dateparser", posted_at_str)
             except (ValueError, TypeError) as e:
                 logger.warning("Failed to parse posted_at '%s': %s", posted_at_str, e)
+        full_metrics["age_hours"] = age_hours
 
         # Детальный анализ: tier_1 + tier_2 + heuristics + recommendations
         detailed = {
