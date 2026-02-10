@@ -34,6 +34,8 @@ JSON_SCHEMA_EXAMPLE = """{
   "posted_at": "string|null",
   "platform": "tiktok|reels|youtube_shorts|other",
   "content_type": "video|carousel",
+  "hook_text": "string|null",
+  "hook_type": "short|medium|long",
   "video_duration_sec": number|null,
   "metrics": {
     "views": number, "likes": number, "comments": number, "shares": number, "saves": number,
@@ -84,22 +86,28 @@ SYSTEM_PROMPT = (
     "\n</BENCHMARKS>\n"
     "\n"
     "## 3. ANALYSIS LOGIC\n"
-    "1. **Content Type Detection (CRITICAL):**\n"
+    "1. **Content Type Detection:**\n"
     "   - **CAROUSEL:** If image contains header 'Post analysis', metric 'Photos viewed', or shows a horizontal row of multiple thumbnails.\n"
     "   - **VIDEO:** If image contains header 'Video analysis', metric 'Video views', or shows a single vertical thumbnail.\n"
     "2. **Date Extraction (MANDATORY):**\n"
     "   - Locate text starting with 'Posted on ...' (usually below the thumbnail).\n"
     "   - Extract the exact date/time string into `posted_at`. NEVER leave null.\n"
-    "3. **Data Extraction:** Extract all visible metrics (views, retention, etc.).\n"
-    "4. **Scoring Algorithm (Deterministic):**\n"
+    "3. **Hook Analysis (CRITICAL):**\n"
+    "   - **Source:** ALWAYS OCR the text overlay on the video thumbnail/cover. This is the `hook_text`.\n"
+    "   - **Classification (Strict Word Count):**\n"
+    "     - **SHORT (1-10 words):** 'The Punch'. Immediate shock, single concept. (e.g. 'Caught my wife cheating').\n"
+    "     - **MEDIUM (11-30 words):** 'The Setup'. Establishes Context + Twist. (e.g. 'Surprising my wife with DNA results...').\n"
+    "     - **LONG (30+ words):** 'The Story'. Full narrative arc (Who, What, Where, Why).\n"
+    "5. **Data Extraction:** Extract all visible metrics (views, retention, etc.).\n"
+    "6. **Scoring Algorithm (Deterministic):**\n"
     '   Calculate the final `score` by summing points strictly according to <BENCHMARKS> -> "scoring_model":\n'
     "   - **Hook Score (max 30):** Determine Hook rating -> Look up points in `scoring_model.tier_1_hook`.\n"
     "   - **Body Score (max 30):** Determine Completion/WatchTime rating -> Look up points in `scoring_model.tier_1_body`.\n"
     "   - **Viral Score (max 20):** Determine Share Rate rating -> Look up points in `scoring_model.tier_2_viral`.\n"
     "   - **Depth Score (max 20):** Determine Save+Comment rating -> Look up points in `scoring_model.tier_2_depth`.\n"
     '   - **Total:** Sum these 4 values. Apply penalties if "platinum_trap" or "marketing_hook" heuristics match.\n'
-    '5. **Heuristics:** Check against "expert_heuristics_logic" in benchmarks.\n'
-    '6. **Decision Tree:** Follow "automated_decision_tree" priority.\n'
+    '7. **Heuristics:** Check against "expert_heuristics_logic" in benchmarks.\n'
+    '8. **Decision Tree:** Follow "automated_decision_tree" priority.\n'
     "\n"
     "## 4. OUTPUT SCHEMA\n"
     "Response must be ONLY valid JSON.\n"
@@ -120,7 +128,7 @@ You will receive TWO images:
 Extract ALL visible numbers, graphs, and data points from BOTH images. Apply the full Metrics Bible benchmarks.
 Follow the Decision Tree to arrive at the final verdict.
 
-Identify if this is a Video or Carousel based on the header ('Video analysis' vs 'Post analysis'). Extract 'Posted on' date strictly.
+Identify if this is a Video or Carousel based on the header ('Video analysis' vs 'Post analysis'). Extract 'Posted on' date strictly. OCR the text on the video thumbnail for `hook_text` and classify its type based on word count.
 
 Rules:
 - Identify the platform from the UI (TikTok / YouTube Shorts / Reels) - detect automatically from icons and colors.
