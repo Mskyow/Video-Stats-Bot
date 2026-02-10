@@ -239,7 +239,7 @@ class TestSyncExportToSheet:
 
         # Verify row structure
         call_args = mock_worksheet.append_row.call_args[0][0]
-        assert len(call_args) == 16  # Columns A-P
+        assert len(call_args) == 18  # Columns A-R
 
     @patch("src.services.sheets_service._get_client")
     @patch("src.services.sheets_service._get_worksheet")
@@ -277,7 +277,7 @@ class TestSyncExportToSheet:
 
         assert result is True
         call_args = mock_worksheet.append_row.call_args[0][0]
-        assert len(call_args) == 16
+        assert len(call_args) == 18
         # Check defaults for missing fields
         assert call_args[2] == "Video"  # Default content type
         assert call_args[9] == 100  # Views
@@ -317,8 +317,8 @@ class TestSyncExportToSheet:
 class TestRowStructure:
     """Tests for row structure validation."""
 
-    def test_row_has_16_columns(self, sample_ai_response_video):
-        """Row should have exactly 16 columns (A-P)."""
+    def test_row_has_18_columns(self, sample_ai_response_video):
+        """Row should have exactly 18 columns (A-R)."""
         with patch("src.services.sheets_service._get_client") as mock_get_client:
             with patch("src.services.sheets_service._get_worksheet") as mock_get_worksheet:
                 mock_worksheet = Mock()
@@ -330,7 +330,7 @@ class TestRowStructure:
                         export_video_to_sheet(sample_ai_response_video)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
-                assert len(call_args) == 16
+                assert len(call_args) == 18
 
     def test_column_a_processed_at(self, sample_ai_response_video):
         """Column A should be processed timestamp."""
@@ -451,8 +451,8 @@ class TestDataCompatibility:
     """Tests for data compatibility between AI response and sheets format."""
 
     def test_ai_response_maps_to_all_sheets_columns(self, sample_ai_response_video):
-        """AI response should contain data for all 16 columns."""
-        # Columns A-P mapping verification
+        """AI response should contain data for all 18 columns."""
+        # Columns A-R mapping verification
         required_mappings = {
             "posted_at": sample_ai_response_video.get("posted_at"),  # B
             "content_type": sample_ai_response_video.get("content_type"),  # C
@@ -461,6 +461,8 @@ class TestDataCompatibility:
             "hook_type": sample_ai_response_video.get("hook_type"),  # G
             "score": sample_ai_response_video.get("score"),  # H
             "verdict": sample_ai_response_video.get("verdict"),  # I
+            "analysis": sample_ai_response_video.get("analysis"),  # Q
+            "raw_response": sample_ai_response_video.get("raw_response"),  # R
         }
 
         for col, value in required_mappings.items():

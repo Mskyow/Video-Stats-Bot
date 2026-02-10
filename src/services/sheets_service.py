@@ -39,7 +39,7 @@ _sheets_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 MAX_RETRIES = 3
 RETRY_DELAY_BASE = 2  # секунды
 
-# Определение 16 колонок отчета в строгом порядке
+# Определение 17 колонок отчета в строгом порядке
 REPORT_COLUMNS = [
     "Processed At",   # 1
     "Posted At",      # 2
@@ -57,6 +57,8 @@ REPORT_COLUMNS = [
     "Retention",      # 14
     "Watch Time",     # 15
     "ER",             # 16
+    "AI Analysis",    # 17
+    "Raw AI Response", # 18
 ]
 
 
@@ -212,13 +214,25 @@ def _ensure_headers(worksheet: gspread.Worksheet) -> None:
         if not first_row:
             logger.info("Headers missing. Creating headers in Google Sheet")
             worksheet.insert_row(REPORT_COLUMNS, 1)
-        elif first_row[0] != REPORT_COLUMNS[0]:
-             logger.info("First column mismatch (%s != %s). Updating headers...", first_row[0], REPORT_COLUMNS[0])
-             # В этом случае лучше не перезаписывать всю строку, чтобы не испортить данные, 
-             # если формат отличается. Но так как это "ensure", предположим, что нужно обновить.
-             # Для безопасности пока оставим insert_row только для пустых листов, 
-             # или если явно видно, что это не заголовок.
-             pass 
+        else:
+            # Проверяем количество колонок и добавляем недостающие
+            current_len = len(first_row)
+            expected_len = len(REPORT_COLUMNS)
+            
+            if current_len < expected_len:
+                logger.info("Updating headers: adding %d new columns", expected_len - current_len)
+                # Добавляем заголовки по одному (безопаснее, чем range update без gspread.utils)
+                for i in range(current_len, expected_len):
+                    # i - индекс (0-based), для gspread update_cell нужно (row, col) 1-based
+                    worksheet.update_cell(1, i + 1, REPORT_COLUMNS[i])
+            
+            elif first_row[0] != REPORT_COLUMNS[0]:
+                 logger.info("First column mismatch (%s != %s). Updating headers...", first_row[0], REPORT_COLUMNS[0])
+                 # В этом случае лучше не перезаписывать всю строку, чтобы не испортить данные, 
+                 # если формат отличается. Но так как это "ensure", предположим, что нужно обновить.
+                 # Для безопасности пока оставим insert_row только для пустых листов, 
+                 # или если явно видно, что это не заголовок.
+                 pass 
 
     except Exception as e:
         logger.warning("Could not ensure headers: %s", e)
@@ -333,13 +347,13 @@ def _safe_get(data: dict[str, Any], key: str, default: str = "-") -> str:
 
 def _build_row(video_data: dict[str, Any]) -> list[str]:
     """
-    Формирует строку данных для экспорта в 16-колоночный формат.
+    Формирует строку данных для экспорта в 17-колоночный формат.
 
     Args:
         video_data: Словарь с данными видео.
 
     Returns:
-        Список значений для 16 колонок.
+        Список значений для 17 колонок.
     """
     # 1. Processed At - текущая дата/время
     processed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -411,6 +425,9 @@ def _build_row(video_data: dict[str, Any]) -> list[str]:
         aggregated_er = _calculate_er(actions, views)
     er_str = _format_percentage(aggregated_er)
 
+    # 17. AI Analysis
+    analysis = _safe_get(video_data, "analysis", "-")
+
     return [
         processed_at,   # 1
         posted_at,      # 2
@@ -428,6 +445,7 @@ def _build_row(video_data: dict[str, Any]) -> list[str]:
         retention_str,  # 14
         watch_time_str, # 15
         er_str,         # 16
+        analysis,       # 17
     ]
 
 
@@ -474,7 +492,7 @@ def _append_row_with_retry(
 
 def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
     """
-    Экспортирует данные видео в Google Sheet в 16-колоночном формате.
+    Экспортирует данные видео в Google Sheet в 17-колоночном формате.
 
     Колонки (в порядке):
         1. Processed At - дата/время обработки
@@ -493,6 +511,7 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
         14. Retention - удержание
         15. Watch Time - время просмотра
         16. ER - Engagement Rate (дорасчет если нужно)
+        17. AI Analysis - детальный анализ от AI
 
     Args:
         video_data: Словарь с данными видео.

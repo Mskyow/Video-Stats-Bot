@@ -52,7 +52,8 @@ def sample_ai_response_video() -> dict[str, Any]:
         "recommendations": [
             "Продолжай в том же духе",
             "Попробуй увеличить частоту публикаций"
-        ]
+        ],
+        "raw_response": '{"some": "json"}'
     }
 
 
@@ -86,7 +87,8 @@ def sample_ai_response_carousel() -> dict[str, Any]:
         "recommendations": [
             "Усиль CTA на последних слайдах",
             "Добавь интерактивные элементы"
-        ]
+        ],
+        "raw_response": '{"some": "carousel_json"}'
     }
 
 

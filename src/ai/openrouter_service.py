@@ -113,9 +113,11 @@ SYSTEM_PROMPT = (
     "     - **TikTok:** Look for 'On average viewers watched **X%**'. Use X directly as `avg_watch_time_pct`.\n"
     "     - **Instagram:** Look for 'Average watch time' (e.g. 3s, 1m). Calculate percentage: (Average Watch Time / Video Duration) * 100.\n"
     "     - **Carousel:** Look for 'Photos Viewed' (e.g. 2.1). Calculate: (Photos Viewed / Total Photos) * 100. If total unknown, leave null.\n"
-    "   - **Retention at 3s:**\n"
-    "     - Locate the Retention Graph. Identify the value at the 3-second mark (`retention_3s`).\n"
-    "   - **IMPORTANT:** Ensure `metrics.retention_3s` and `metrics.avg_watch_time_pct` are filled in the JSON output. If exact numbers are not visible but can be estimated from the graph, provide the estimate.\n"
+    "   - **Retention at 3s (MANDATORY):**\n"
+    "     - Locate the Retention Graph. Look for the curve value at the 3-second mark (X-axis).\n"
+    "     - **FORCE ESTIMATION:** If the exact number is NOT written, you **MUST visually estimate** the percentage based on the curve's position relative to the Y-axis (0-100%).\n"
+    "     - Example: If the curve drops slightly from the top, estimate ~80-95%. If it drops to half, estimate ~50%.\n"
+    "     - **NEVER return null** for `retention_3s` if a retention graph is visible. Give your best visual estimate.\n"
     "   - **Hook Text (Secondary/Backup):**\n"
     "     - **IF** `hook_text` was NOT found in Step 5, try to OCR text from the thumbnail associated with the Retention Graph.\n"
     "\n"
@@ -316,4 +318,3 @@ def analyze_screenshot(
     except Exception as e:
         logger.exception(f"OpenRouter request failed: {e}")
         return None, None
-

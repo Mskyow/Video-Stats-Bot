@@ -173,6 +173,9 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
                         saved_count += 1
                         # Экспорт в Google Sheets через очередь (асинхронно)
                         if GOOGLE_SHEET_ID:
+                            # Добавляем сырой ответ AI в данные для экспорта
+                            if res.raw_response:
+                                res.ai_result["raw_response"] = res.raw_response
                             queue_export(res.ai_result)
                 
             except Exception as e:
