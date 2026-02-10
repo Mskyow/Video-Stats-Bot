@@ -86,7 +86,7 @@ SYSTEM_PROMPT = (
     "\n</BENCHMARKS>\n"
     "\n"
     "## 3. ANALYSIS LOGIC\n"
-    "1. **Content Type Detection:**\n"
+    "1. **Content Type Detection (CRITICAL):**\n"
     "   - **CAROUSEL:** If image contains header 'Post analysis', metric 'Photos viewed', or shows a horizontal row of multiple thumbnails.\n"
     "   - **VIDEO:** If image contains header 'Video analysis', metric 'Video views', or shows a single vertical thumbnail.\n"
     "2. **Date Extraction (MANDATORY):**\n"
@@ -233,66 +233,65 @@ def analyze_screenshot(
         parsed_result: распарсенный JSON или None.
         raw_response_text: сырой текст ответа для дебага.
     """
-    model = (config.OPENROUTER_MODEL or DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    model = config.OPENROUTER_MODEL or DEFAULT_MODEL
     api_key = config.OPENROUTER_API_KEY
+    
+    # Формируем контент для сообщения
+    content = []
+    content.append({"type": "text", "text": USER_PROMPT})
 
-    # Build content array with text prompt and all images
-    content: list[dict[str, Any]] = [{"type": "text", "text": USER_PROMPT}]
-
-    for image_bytes in images_list:
-        b64 = base64.standard_b64encode(image_bytes).decode("ascii")
-        data_uri = f"data:{mime_type};base64,{b64}"
-        content.append({"type": "image_url", "image_url": {"url": data_uri}})
-
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": content,
-        },
-    ]
+    for img_bytes in images_list:
+        b64_str = base64.b64encode(img_bytes).decode('utf-8')
+        data_uri = f"data:{mime_type};base64,{b64_str}"
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": data_uri}
+        })
 
     payload = {
         "model": model,
-        "messages": messages,
-        "max_tokens": 8192,
-        "reasoning": {"effort": "medium"},
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": content}
+        ]
     }
+
+    # Добавляем reasoning если модель его поддерживает (Gemini 2.0 Thinking)
+    if "thinking" in model.lower() or "reasoning" in model.lower() or "gemini-3" in model.lower():
+        payload["reasoning"] = {"effort": "medium"}
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://github.com/video-stats-bot",
+        "X-Title": "Video Stats Bot"
     }
 
     try:
-        resp = requests.post(
+        response = requests.post(
             OPENROUTER_URL,
-            json=payload,
             headers=headers,
-            timeout=120,
+            json=payload,
+            timeout=120
         )
-        resp.raise_for_status()
-        data = resp.json()
-
-        choices = data.get("choices") or []
+        response.raise_for_status()
+        
+        result = response.json()
+        choices = result.get("choices", [])
         if not choices:
-            logger.warning("OpenRouter returned no choices")
+            logger.error("OpenRouter returned no choices: %s", result)
             return None, None
-
-        msg = choices[0].get("message") or {}
-        raw_text = (msg.get("content") or "").strip()
-        if not raw_text:
-            logger.warning("OpenRouter empty content in message")
-            return None, None
-
+            
+        message = choices[0].get("message", {})
+        raw_text = message.get("content", "")
+        
         parsed = _parse_response(raw_text)
         return parsed, raw_text
 
-    except requests.RequestException as e:
-        logger.exception("OpenRouter request failed: %s", e)
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"OpenRouter HTTP Error: {e.response.status_code} - {e.response.text}")
         return None, None
-    except (KeyError, TypeError, ValueError) as e:
-        logger.exception("OpenRouter response parse failed: %s", e)
+    except Exception as e:
+        logger.exception(f"OpenRouter request failed: {e}")
         return None, None
 

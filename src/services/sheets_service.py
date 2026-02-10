@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from gspread.exceptions import APIError, WorksheetNotFound
 from oauth2client.service_account import ServiceAccountCredentials
 
 from src.config import (
+    GOOGLE_CREDENTIALS_JSON,
     GOOGLE_SHEET_CREDENTIALS_PATH,
     GOOGLE_SHEET_ID,
     GOOGLE_SHEET_WORKSHEET_NAME,
@@ -114,23 +116,33 @@ def _get_credentials() -> ServiceAccountCredentials:
     Raises:
         FileNotFoundError: Если файл credentials не найден.
     """
-    creds_path = Path(GOOGLE_SHEET_CREDENTIALS_PATH)
-
-    if not creds_path.exists():
-        raise FileNotFoundError(
-            f"Файл credentials не найден: {creds_path}. "
-            "Проверьте GOOGLE_SHEET_CREDENTIALS_PATH в .env"
-        )
-
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",
     ]
+    
+    # 1. Попытка загрузить из файла (приоритет локальной разработки)
+    if GOOGLE_SHEET_CREDENTIALS_PATH:
+        creds_path = Path(GOOGLE_SHEET_CREDENTIALS_PATH)
+        if creds_path.exists():
+            return ServiceAccountCredentials.from_json_keyfile_name(
+                str(creds_path), scope
+            )
+        else:
+            logger.warning("File not found at GOOGLE_SHEET_CREDENTIALS_PATH: %s", creds_path)
 
-    credentials = ServiceAccountCredentials.from_json_keyfile_name(
-        str(creds_path), scope
+    # 2. Попытка загрузить из JSON-строки (для Railway/Prod)
+    if GOOGLE_CREDENTIALS_JSON:
+        try:
+            creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+            return ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        except json.JSONDecodeError as e:
+            logger.error("Failed to parse GOOGLE_CREDENTIALS_JSON: %s", e)
+
+    raise FileNotFoundError(
+        "Google Sheets credentials not found. "
+        "Set GOOGLE_SHEET_CREDENTIALS_PATH (file) or GOOGLE_CREDENTIALS_JSON (env var)."
     )
-    return credentials
 
 
 def _get_client() -> gspread.Client:
@@ -158,7 +170,14 @@ def _get_worksheet(client: gspread.Client) -> gspread.Worksheet:
     Raises:
         WorksheetNotFound: Если лист не найден и не удалось создать.
     """
-    spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+    # Сначала пытаемся открыть таблицу по ID
+    try:
+        spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+    except Exception as e:
+        logger.error("Failed to open spreadsheet by ID '%s': %s. Check permissions.", GOOGLE_SHEET_ID, e)
+        raise
+
+    # Пытаемся получить лист по имени
     try:
         worksheet = spreadsheet.worksheet(GOOGLE_SHEET_WORKSHEET_NAME)
         return worksheet
@@ -172,6 +191,8 @@ def _get_worksheet(client: gspread.Client) -> gspread.Worksheet:
         try:
             worksheet = spreadsheet.add_worksheet(title=GOOGLE_SHEET_WORKSHEET_NAME, rows=1000, cols=20)
             logger.info("Successfully created worksheet '%s'", GOOGLE_SHEET_WORKSHEET_NAME)
+            # Добавляем заголовки сразу при создании
+            _ensure_headers(worksheet)
             return worksheet
         except Exception as e:
             logger.error("Failed to create worksheet '%s': %s", GOOGLE_SHEET_WORKSHEET_NAME, e)
@@ -188,9 +209,17 @@ def _ensure_headers(worksheet: gspread.Worksheet) -> None:
     try:
         first_row = worksheet.row_values(1)
         # Если первая строка пустая или не совпадает с ожидаемыми заголовками
-        if not first_row or first_row[0] != REPORT_COLUMNS[0]:
-            logger.info("Creating headers in Google Sheet")
+        if not first_row:
+            logger.info("Headers missing. Creating headers in Google Sheet")
             worksheet.insert_row(REPORT_COLUMNS, 1)
+        elif first_row[0] != REPORT_COLUMNS[0]:
+             logger.info("First column mismatch (%s != %s). Updating headers...", first_row[0], REPORT_COLUMNS[0])
+             # В этом случае лучше не перезаписывать всю строку, чтобы не испортить данные, 
+             # если формат отличается. Но так как это "ensure", предположим, что нужно обновить.
+             # Для безопасности пока оставим insert_row только для пустых листов, 
+             # или если явно видно, что это не заголовок.
+             pass 
+
     except Exception as e:
         logger.warning("Could not ensure headers: %s", e)
 
@@ -467,8 +496,8 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
     Returns:
         True, если экспорт выполнен; False — если произошла ошибка.
     """
-    if not GOOGLE_SHEET_CREDENTIALS_PATH or not GOOGLE_SHEET_ID:
-        logger.debug("Google Sheets not configured; skip export")
+    if (not GOOGLE_SHEET_CREDENTIALS_PATH and not GOOGLE_CREDENTIALS_JSON) or not GOOGLE_SHEET_ID:
+        logger.warning("Google Sheets not configured (missing credentials or Sheet ID). Skip export.")
         return False
 
     try:
