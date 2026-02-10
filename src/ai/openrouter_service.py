@@ -33,6 +33,7 @@ JSON_SCHEMA_EXAMPLE = """{
   "video_title": "string|null",
   "posted_at": "string|null",
   "platform": "tiktok|reels|youtube_shorts|other",
+  "content_type": "video|carousel",
   "video_duration_sec": number|null,
   "metrics": {
     "views": number, "likes": number, "comments": number, "shares": number, "saves": number,
@@ -83,17 +84,22 @@ SYSTEM_PROMPT = (
     "\n</BENCHMARKS>\n"
     "\n"
     "## 3. ANALYSIS LOGIC\n"
-    "1. **Platform ID:** Detect via UI markers (defined in Benchmarks > platforms).\n"
-    "2. **Data Extraction:** Extract all visible numbers. Convert to Rates (Share Rate = Shares/Views*100).\n"
-    "3. **Scoring Algorithm (Deterministic):**\n"
+    "1. **Content Type Detection (CRITICAL):**\n"
+    "   - **CAROUSEL:** If image contains header 'Post analysis', metric 'Photos viewed', or shows a horizontal row of multiple thumbnails.\n"
+    "   - **VIDEO:** If image contains header 'Video analysis', metric 'Video views', or shows a single vertical thumbnail.\n"
+    "2. **Date Extraction (MANDATORY):**\n"
+    "   - Locate text starting with 'Posted on ...' (usually below the thumbnail).\n"
+    "   - Extract the exact date/time string into `posted_at`. NEVER leave null.\n"
+    "3. **Data Extraction:** Extract all visible metrics (views, retention, etc.).\n"
+    "4. **Scoring Algorithm (Deterministic):**\n"
     '   Calculate the final `score` by summing points strictly according to <BENCHMARKS> -> "scoring_model":\n'
     "   - **Hook Score (max 30):** Determine Hook rating -> Look up points in `scoring_model.tier_1_hook`.\n"
     "   - **Body Score (max 30):** Determine Completion/WatchTime rating -> Look up points in `scoring_model.tier_1_body`.\n"
     "   - **Viral Score (max 20):** Determine Share Rate rating -> Look up points in `scoring_model.tier_2_viral`.\n"
     "   - **Depth Score (max 20):** Determine Save+Comment rating -> Look up points in `scoring_model.tier_2_depth`.\n"
     '   - **Total:** Sum these 4 values. Apply penalties if "platinum_trap" or "marketing_hook" heuristics match.\n'
-    '4. **Heuristics:** Check against "expert_heuristics_logic" in benchmarks.\n'
-    '5. **Decision Tree:** Follow "automated_decision_tree" priority.\n'
+    '5. **Heuristics:** Check against "expert_heuristics_logic" in benchmarks.\n'
+    '6. **Decision Tree:** Follow "automated_decision_tree" priority.\n'
     "\n"
     "## 4. OUTPUT SCHEMA\n"
     "Response must be ONLY valid JSON.\n"
@@ -108,16 +114,18 @@ SYSTEM_PROMPT = (
 USER_PROMPT = """Analyze the provided images of video metrics/analytics.
 
 You will receive TWO images:
-1. Overview Metrics: engagement numbers, views, etc.
+1. Overview Metrics: engagement numbers, views, posted date/time, etc.
 2. Retention Graph: audience retention visualization
 
 Extract ALL visible numbers, graphs, and data points from BOTH images. Apply the full Metrics Bible benchmarks.
 Follow the Decision Tree to arrive at the final verdict.
 
+Identify if this is a Video or Carousel based on the header ('Video analysis' vs 'Post analysis'). Extract 'Posted on' date strictly.
+
 Rules:
 - Identify the platform from the UI (TikTok / YouTube Shorts / Reels) - detect automatically from icons and colors.
 - Extract the visible text/headline from the video screenshot as 'video_title'.
-- Extract exact posted date/time if visible (e.g., '2-6', 'Feb 6', '2 days ago') into 'posted_at'.
+- Extract exact posted date/time, it is always located at the bottom of the small video thumbnail (e.g., 'Posted on Feb 6, 2026, 12:51 PM', 'February 6') into 'posted_at'.
 - Read retention and engagement graphs if visible.
 - Calculate engagement rates from raw numbers (share_rate = shares/views*100, etc.).
 - Apply expert heuristics if conditions match.
