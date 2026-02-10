@@ -19,6 +19,7 @@ from aiogram.types import Message, TelegramObject
 
 from src.db.repositories.users import get_user_status, register_user, promote_user_to_approved
 from src.config import AUTH_SECRET
+from src.bot.handlers.start import START_TEXT
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,14 @@ class AuthMiddleware(BaseMiddleware):
         user_id = event.from_user.id
         # Проверяем секретный код в сообщении
         text = getattr(event, "text", "") or ""
-        is_secret_code = text.strip() == AUTH_SECRET
+        clean_text = text.strip()
+        is_secret_code = clean_text == AUTH_SECRET
+
+        # Support /start CODE
+        if not is_secret_code and clean_text.startswith("/start "):
+            parts = clean_text.split(maxsplit=1)
+            if len(parts) > 1 and parts[1].strip() == AUTH_SECRET:
+                is_secret_code = True
 
         # Проверяем текущий статус
         status = await asyncio.to_thread(
@@ -87,7 +95,7 @@ class AuthMiddleware(BaseMiddleware):
             )
             if success:
                 logger.info("User %s approved via secret code", user_id)
-                await event.answer(ACCESS_GRANTED_MESSAGE)
+                await event.answer(f"✅ Доступ разрешён!\n\n{START_TEXT}")
                 return None
             else:
                 logger.error("Failed to approve user %s", user_id)
