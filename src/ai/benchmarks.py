@@ -113,49 +113,49 @@ BENCHMARKS_CONTEXT = {
         "priority_4": "If Views < 3000 AND ER > 10% -> 💎 HIDDEN GEM (DO NOT DELETE)"
     },
     "scoring_model": {
-        "max_score": 100,
+        "max_score": 10,
         "components": {
             "tier_1_hook": {
-                "weight": 30,
+                "weight": 3.0,
                 "metric": "Retention 3s",
                 "rules": {
                     "fail": 0,
-                    "borderline": 15,
-                    "good": 25,
-                    "scale": 30
+                    "borderline": 1.5,
+                    "good": 2.5,
+                    "scale": 3.0
                 }
             },
             "tier_1_body": {
-                "weight": 30,
+                "weight": 3.0,
                 "metric": "Completion Rate OR Avg Watch Time (Best of)",
                 "rules": {
-                    "fail": 5,
-                    "ok": 20,
-                    "excellent": 30
+                    "fail": 0.5,
+                    "ok": 2.0,
+                    "excellent": 3.0
                 }
             },
             "tier_2_viral": {
-                "weight": 20,
+                "weight": 2.0,
                 "metric": "Share Rate",
                 "rules": {
                     "low": 0,
-                    "ok": 10,
-                    "viral": 20
+                    "ok": 1.0,
+                    "viral": 2.0
                 }
             },
             "tier_2_depth": {
-                "weight": 20,
+                "weight": 2.0,
                 "metric": "Engagement Depth (Saves + Comments)",
                 "rules": {
-                    "low": 5,
-                    "ok": 15,
-                    "high_value": 20
+                    "low": 0.5,
+                    "ok": 1.5,
+                    "high_value": 2.0
                 }
             }
         },
         "penalties": {
-            "platinum_trap": -10,
-            "marketing_hook": -10
+            "platinum_trap": -1.0,
+            "marketing_hook": -1.0
         }
     }
 }
