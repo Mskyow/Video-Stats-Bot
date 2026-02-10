@@ -279,28 +279,35 @@ def get_videos_by_date_range(
     client: Client | None,
     start_date: str,
     end_date: str,
+    user_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """
     Возвращает список видео за указанный диапазон дат, отсортированных по score DESC.
+    
+    Args:
+        client: Supabase client
+        start_date: Дата начала (ISO string)
+        end_date: Дата конца (ISO string)
+        user_id: (Опционально) фильтр по ID пользователя. Если не задан - возвращает для всех.
     """
     if client is None:
         return []
     try:
         # Assuming created_at is a timestamp or date string
         # Supabase filtering: gte (>=) start_date, lte (<=) end_date
-        # Note: If end_date is just a date 'YYYY-MM-DD', we might need to adjust for time
-        # but typically Supabase handles ISO strings. 
-        # For full day inclusion, end_date might need to be 'YYYY-MM-DD 23:59:59' or similar if passing datetime.
-        # But keeping it simple as passed strings.
         
-        resp = (
+        query = (
             client.table("videos")
             .select("*")
             .gte("created_at", start_date)
             .lte("created_at", end_date)
             .order("score", desc=True)
-            .execute()
         )
+        
+        if user_id:
+            query = query.eq("user_id", user_id)
+            
+        resp = query.execute()
         return resp.data or []
     except Exception as e:
         logger.exception("get_videos_by_date_range failed: %s", e)

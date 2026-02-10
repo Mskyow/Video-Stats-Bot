@@ -9,8 +9,9 @@ from typing import Any
 
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
+from src.config import GOOGLE_SHEET_ID
 from src.db.repositories.videos import get_videos_by_date_range, get_global_stats
 
 logger = logging.getLogger(__name__)
@@ -49,22 +50,10 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
         # Using last 24h for broader coverage
         # Minsk time is UTC+3
         now = datetime.utcnow()
-        # Adjusting "today" concept to Minsk time if we wanted day boundaries,
-        # but "last 24h" is relative and simpler.
-        # If the user means "Show me stats for the day in Minsk time", we should adjust.
-        # Current implementation: Last 24 hours from NOW (UTC).
-        # To align with user expectation "standard time is Minsk (GMT+3)":
-        # If they want "Today's stats" meaning "since 00:00 Minsk time", we should do that.
-        # However, /day_stats usually implies "daily report", often last 24h rolling or previous calendar day.
-        # Let's keep "last 24h" logic but label it clearly, or shift to Minsk timezone for display.
-        
-        # Let's shift the display date to Minsk time (+3 hours)
         minsk_offset = timedelta(hours=3)
         now_minsk = now + minsk_offset
         
-        # 24h window remains 24h window regardless of timezone, but let's ensure we capture 
-        # what they likely mean by "day stats" - typically the last full cycle.
-        
+        # 24h window
         yesterday = now - timedelta(hours=24)
         start_date = yesterday.isoformat()
         end_date = now.isoformat()
@@ -78,64 +67,99 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
             )
             return
 
-        # Group by platform
-        grouped: dict[str, list] = {}
+        # 1. Считаем количество видео по платформам
+        # Инициализируем нужные платформы с 0, чтобы они всегда были в отчете
+        platform_counts = {"TikTok": 0, "Instagram": 0, "YouTube Shorts": 0}
+        
         for v in videos:
-            plat = (v.get("platform") or "Other").capitalize()
-            if "tiktok" in plat.lower():
-                plat = "TikTok"
-            elif "reels" in plat.lower():
-                plat = "Reels"
-            elif "youtube" in plat.lower():
-                plat = "YouTube Shorts"
+            plat_raw = (v.get("platform") or "Other").lower()
+            if "tiktok" in plat_raw:
+                platform_counts["TikTok"] += 1
+            elif "reels" in plat_raw or "instagram" in plat_raw:
+                platform_counts["Instagram"] += 1
+            elif "youtube" in plat_raw or "shorts" in plat_raw:
+                platform_counts["YouTube Shorts"] += 1
+            else:
+                platform_counts.setdefault("Other", 0)
+                platform_counts["Other"] += 1
+        
+        platforms_summary = []
+        # Выводим только те платформы, где есть видео
+        for plat, count in platform_counts.items():
+            if count > 0:
+                platforms_summary.append(f"{plat}: {count}")
+        
+        platforms_text = ". ".join(platforms_summary) if platforms_summary else "Нет данных"
+
+        # 2. Средний балл за сегодня
+        scores = []
+        for v in videos:
+            s = v.get("score")
+            # Проверяем, что score существует и не None
+            if s is not None:
+                try:
+                    scores.append(float(s))
+                except (ValueError, TypeError):
+                    pass
+        
+        avg_score = sum(scores) / len(scores) if scores else 0
+        
+        # 3. Высший балл
+        max_score = max(scores) if scores else 0
+
+        # 4. Высшие просмотры
+        max_views = 0
+        for v in videos:
+            metrics = v.get("metrics") or {}
+            # Пробуем разные ключи для просмотров
+            raw_views = metrics.get("views") or metrics.get("view_count")
             
-            grouped.setdefault(plat, []).append(v)
+            if raw_views is not None:
+                try:
+                    current_views = 0
+                    if isinstance(raw_views, (int, float)):
+                        current_views = int(raw_views)
+                    elif isinstance(raw_views, str):
+                        # Очистка и обработка суффиксов
+                        clean_views = raw_views.upper().replace(",", "").replace(" ", "")
+                        if "K" in clean_views:
+                            current_views = int(float(clean_views.replace("K", "")) * 1000)
+                        elif "M" in clean_views:
+                            current_views = int(float(clean_views.replace("M", "")) * 1000000)
+                        elif clean_views.replace('.', '', 1).isdigit(): # Проверка на число float
+                             current_views = int(float(clean_views))
+                    
+                    if current_views > max_views:
+                        max_views = current_views
+                except (ValueError, TypeError):
+                    pass
 
-        # Format output with Minsk date
-        lines = [f"📊 Отчёт за {now_minsk.strftime('%d.%m')}"]
+        # Формируем текст отчета
+        # Форматирование: 13,453 -> 13 453
+        formatted_views = f"{max_views:,}".replace(",", " ")
+        
+        report_lines = [
+            f"<b>Отчет по видео за последние сутки ({now_minsk.strftime('%d.%m')}):</b>\n",
+            f"1. Количество видео по платформам:",
+            f"{platforms_text}",
+            f"2. Средний балл за сегодня: {avg_score:.1f}/10",
+            f"3. Высший балл за видео: {max_score:.1f}/10",
+            f"4. Высшие просмотры на видео за сегодня: {formatted_views}",
+            "\nДля просмотра детальной статистики перейдите в Google таблицу👇"
+        ]
+        
+        report_text = "\n".join(report_lines)
 
-        for plat, v_list in grouped.items():
-            lines.append(f"\n📱 <b>{plat}</b>")
-            for v in v_list:
-                score = int(v.get("score") or 0)
-                verdict = v.get("verdict") or ""
-                title = v.get("title") or "No Title"
-                hook_type = "Unknown"
-                
-                # Extract hook_type from metrics if available
-                metrics = v.get("metrics") or {}
-                if "hook_type" in metrics:
-                     hook_type = metrics["hook_type"]
-                
-                duration = v.get("video_duration_sec")
-                dur_str = f"{duration}s" if duration else "?"
+        # Клавиатура с кнопкой
+        markup = None
+        if GOOGLE_SHEET_ID:
+            # Для мобильных устройств ссылка на Google Sheets открывает приложение
+            sheet_url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}"
+            markup = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📊 Перейти в Google Таблицу", url=sheet_url)]
+            ])
 
-                # Icon based on score/verdict
-                icon = "⚪"
-                if "KILL" in verdict.upper():
-                    icon = "🔴"
-                elif "SCALE" in verdict.upper():
-                    icon = "🟢"
-                elif "ITERATE" in verdict.upper():
-                    icon = "🟡"
-                
-                # Short verdict for display
-                short_verdict = "Iterate"
-                if "KILL" in verdict.upper():
-                    short_verdict = "Kill"
-                elif "SCALE" in verdict.upper():
-                    short_verdict = "Scale"
-
-                lines.append(f"{icon} [{score}] \"{title}\" ({short_verdict})")
-                lines.append(f"   └ Hook: {hook_type} | {dur_str}")
-
-        report_text = "\n".join(lines)
-        # Telegram message limit is 4096 chars. If report is long, split it.
-        # For now, assuming it fits.
-        if len(report_text) > 4000:
-            report_text = report_text[:4000] + "\n... (truncated)"
-
-        await message.answer(report_text)
+        await message.answer(report_text, reply_markup=markup, parse_mode="HTML")
         
     except Exception as e:
         logger.exception("Error fetching day stats: %s", e)
