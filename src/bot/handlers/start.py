@@ -7,7 +7,7 @@ import asyncio
 
 from aiogram import Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 from src import config
 from src.db.repositories.users import get_or_create_user, is_user_authorized, authorize_user
@@ -18,40 +18,25 @@ router = Router(name="start")
 
 START_TEXT = (
     "👋 <b>Привет! Я — Creator Copilot.</b>\n\n"
-    "Анализирую метрики видео из TikTok, Instagram Reels и YouTube Shorts. "
-    "Скажу, что работает, что нет — и что делать дальше.\n\n"
+    "С помощью искусственного интеллекта я анализирую скриншоты со статистикой твоих видео (TikTok, Reels, Shorts).\n\n"
+    "Я автоматически извлекаю все важные метрики, добавляю их в базу данных и Google Sheets, чтобы ты мог видеть полную картину своего контента.\n\n"
     "<b>Команды:</b>\n"
-    "/upload — загрузить статистику видео\n"
-    "/help — как пользоваться ботом\n"
-    "/stats — твоя статистика\n"
-    "/day_stats — отчёт за 24 часа\n"
-    "/all_stats — общая статистика"
+    "/upload — включить режим загрузки скриншотов\n"
+    "/stats — посмотреть свою статистику\n"
+    "/help — инструкция по использованию"
 )
 
 HELP_TEXT = (
-    "<b>📖 Как пользоваться</b>\n\n"
-    "<b>1. Активируй режим загрузки:</b>\n"
-    "Отправь /upload — я буду готов принимать скриншоты\n\n"
-    "<b>2. Отправь скриншоты:</b>\n"
-    "• Лучше всего работают 2 скриншота: Обзор (метрики) + График удержания\n"
-    "• Можно загружать несколько видео сразу\n"
-    "• Поддерживаются TikTok, YouTube Studio, Instagram Insights\n\n"
-    "<b>3. Заверши загрузку:</b>\n"
-    "Когда закончишь, отправь /done — я выйду из режима загрузки\n\n"
-    "<b>Что анализирую:</b>\n"
-    "• Hook (3 сек) — цепляет ли начало\n"
-    "• Retention — как долго смотрят\n"
-    "• Engagement — лайки, комменты, репосты\n\n"
-    "<b>Бенчмарки (норма для шортс):</b>\n"
-    "Hook (3с): 🔴 &lt;55% (Плохо) | 🟡 55-70% (Норм) | 🟢 70%+ (Хорошо)\n"
-    "Досмотр: 🔴 &lt;40% (Плохо) | 🟡 40-70% (Норм) | 🟢 70%+ (Хорошо)\n"
-    "ER (вовлечение): 🔴 &lt;5% (Плохо) | 🟡 5-10% (Норм) | 🟢 10%+ (Хорошо)\n"
-    "Репосты: 🔴 &lt;0.5% | 🟡 0.5-1.5% | 🟢 1.5%+\n"
-    "Сохранения: 🔴 &lt;1% | 🟡 1-3% | 🟢 3%+\n\n"
-    "<b>Вердикты:</b>\n"
-    "🔴 KILL — не трать время, идея не зашла\n"
-    "🟡 ITERATE — есть потенциал, доработай\n"
-    "🟢 SCALE — отлично, делай больше таких"
+    "<b>🚀 Как пользоваться ботом?</b>\n\n"
+    "Всё очень просто:\n\n"
+    "1️⃣ <b>Нажми /upload</b>\n"
+    "Бот перейдет в режим ожидания скриншотов.\n\n"
+    "2️⃣ <b>Отправь скриншоты статистики</b>\n"
+    "Просто скинь скриншоты метрик из TikTok, Instagram или YouTube Studio. Я сам распознаю, где какая платформа и какие цифры важны.\n\n"
+    "3️⃣ <b>Готово!</b>\n"
+    "Я обработаю данные, оценю видео по 10-балльной шкале, дам рекомендации и сохраню всё в таблицу.\n\n"
+    "Когда закончишь загружать — нажми /done, чтобы выйти из режима загрузки.\n\n"
+    "👇 <b>Полезные материалы:</b>"
 )
 
 
@@ -103,7 +88,10 @@ async def cmd_start(message: Message) -> None:
 
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
-    await message.answer(HELP_TEXT)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📚 Бенчмарки и расчёт оценки", url="https://www.notion.so/3031199f0c2480c98ef3fbb036702cc4?source=copy_link")]
+    ])
+    await message.answer(HELP_TEXT, reply_markup=keyboard)
 
 
 @router.message(Command("stats"))
