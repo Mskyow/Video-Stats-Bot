@@ -147,6 +147,7 @@ def _get_client() -> gspread.Client:
 def _get_worksheet(client: gspread.Client) -> gspread.Worksheet:
     """
     Открывает рабочий лист в существующей таблице.
+    Если лист не найден, пытается создать его.
 
     Args:
         client: Авторизованный gspread Client.
@@ -155,11 +156,26 @@ def _get_worksheet(client: gspread.Client) -> gspread.Worksheet:
         Рабочий лист.
 
     Raises:
-        WorksheetNotFound: Если лист не найден.
+        WorksheetNotFound: Если лист не найден и не удалось создать.
     """
     spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
-    worksheet = spreadsheet.worksheet(GOOGLE_SHEET_WORKSHEET_NAME)
-    return worksheet
+    try:
+        worksheet = spreadsheet.worksheet(GOOGLE_SHEET_WORKSHEET_NAME)
+        return worksheet
+    except WorksheetNotFound:
+        available_sheets = [ws.title for ws in spreadsheet.worksheets()]
+        logger.warning(
+            "Worksheet '%s' not found. Available sheets: %s. Attempting to create...",
+            GOOGLE_SHEET_WORKSHEET_NAME,
+            available_sheets
+        )
+        try:
+            worksheet = spreadsheet.add_worksheet(title=GOOGLE_SHEET_WORKSHEET_NAME, rows=1000, cols=20)
+            logger.info("Successfully created worksheet '%s'", GOOGLE_SHEET_WORKSHEET_NAME)
+            return worksheet
+        except Exception as e:
+            logger.error("Failed to create worksheet '%s': %s", GOOGLE_SHEET_WORKSHEET_NAME, e)
+            raise
 
 
 def _ensure_headers(worksheet: gspread.Worksheet) -> None:

@@ -51,7 +51,7 @@ GOOGLE_SHEET_CREDENTIALS_PATH: str | None = _get_optional("GOOGLE_SHEET_CREDENTI
 GOOGLE_CREDENTIALS_JSON: str | None = _get_optional("GOOGLE_CREDENTIALS_JSON")
 GOOGLE_SHEET_ID: str | None = _get_optional("GOOGLE_SHEET_ID")
 # Название листа в таблице (например "Hooks CRM" или "Hook Analytics")
-GOOGLE_SHEET_WORKSHEET_NAME: str = _get_optional("GOOGLE_SHEET_WORKSHEET_NAME") or "Hook Analytics"
+GOOGLE_SHEET_WORKSHEET_NAME: str = _get_optional("GOOGLE_SHEET_WORKSHEET_NAME") or "Hooks CRM"
 REPORT_CHAT_ID: int | None = int(v) if (v := _get_optional("REPORT_CHAT_ID")) else None
 
 # Лимит одновременных запросов к AI
