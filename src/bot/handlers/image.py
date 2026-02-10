@@ -139,7 +139,6 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
             error_message="⚠️ Непарный скриншот (нужна пара: Обзор + Удержание)."
         ))
 
-    # Сортируем результаты по индексу для отчета
     results.sort(key=lambda r: r.index)
 
     # 3. Сохранение данных (Fault Tolerance: сохраняем то, что успешно)
@@ -152,36 +151,45 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
 
     for res in results:
         if res.success and res.ai_result:
+            is_duplicate = False
             try:
-                # Сохранение в Supabase
+                # 1. Попытка сохранения в Supabase
                 if supabase and user_id:
-                    insert_res = await asyncio.to_thread(
-                        insert_video,
-                        supabase,
-                        user_id,
-                        res.ai_result,
-                        res.raw_response,
-                    )
-                    
-                    if insert_res and insert_res.get("duplicate"):
-                        res.error_message = "♻️ Дубликат (уже сохранено)"
-                        # Не считаем успешным сохранением, но и не ошибка обработки
-                        duplicate_count += 1
-                        # Дубликаты не экспортируем в Sheets повторно? 
-                        # Логика: если дубликат, то не сохраняем
-                    else:
+                    try:
+                        insert_res = await asyncio.to_thread(
+                            insert_video,
+                            supabase,
+                            user_id,
+                            res.ai_result,
+                            res.raw_response,
+                        )
+                        
+                        if insert_res and insert_res.get("duplicate"):
+                            is_duplicate = True
+                            res.error_message = "♻️ Дубликат (уже сохранено)"
+                            duplicate_count += 1
+                        else:
+                            saved_count += 1
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to save video {res.index} to Supabase: {e}")
+                        # Считаем успешным, так как анализ прошел
                         saved_count += 1
-                        # Экспорт в Google Sheets через очередь (асинхронно)
-                        if GOOGLE_SHEET_ID:
-                            # Добавляем сырой ответ AI в данные для экспорта
-                            if res.raw_response:
-                                res.ai_result["raw_response"] = res.raw_response
-                            queue_export(res.ai_result)
+                else:
+                    saved_count += 1
+
+                # 2. Экспорт в Google Sheets (если не дубликат)
+                if not is_duplicate and GOOGLE_SHEET_ID:
+                    if res.raw_response:
+                        res.ai_result["raw_response"] = res.raw_response
+                    # Отправляем в очередь и передаем chat_id для уведомления
+                    queue_export(res.ai_result, message.chat.id)
                 
             except Exception as e:
-                logger.error(f"Failed to save video {res.index}: {e}")
-                # Не помечаем как failed для юзера, так как анализ прошел, проблема на бэкенде
-                # Можно добавить пометку в отчет, но пока просто логируем.
+                logger.error(f"Failed to process result for video {res.index}: {e}")
+                # Если упало на верхнем уровне
+                if not is_duplicate:
+                     saved_count += 1
         else:
             failed_count += 1
 
@@ -196,6 +204,10 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     # Итого: total = saved + duplicates + failed
     
     report_text = build_summary_report(results, saved_count, failed_count, duplicate_count)
+
+    
+    if GOOGLE_SHEET_ID:
+        report_text += f"\n\n📤 <b>Успешно отправлено в Google таблицу: {saved_count}</b>"
 
     # Кнопки
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])

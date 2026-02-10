@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import time
 from typing import Any
 
 import requests
@@ -291,30 +292,46 @@ def analyze_screenshot(
         "X-Title": "Video Stats Bot"
     }
 
-    try:
-        response = requests.post(
-            OPENROUTER_URL,
-            headers=headers,
-            json=payload,
-            timeout=120
-        )
-        response.raise_for_status()
-        
-        result = response.json()
-        choices = result.get("choices", [])
-        if not choices:
-            logger.error("OpenRouter returned no choices: %s", result)
-            return None, None
+    # Retry logic with exponential backoff
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                OPENROUTER_URL,
+                headers=headers,
+                json=payload,
+                timeout=120
+            )
+            response.raise_for_status()
             
-        message = choices[0].get("message", {})
-        raw_text = message.get("content", "")
-        
-        parsed = _parse_response(raw_text)
-        return parsed, raw_text
+            result = response.json()
+            choices = result.get("choices", [])
+            if not choices:
+                logger.error("OpenRouter returned no choices: %s", result)
+                if attempt == max_retries - 1:
+                    return None, None
+                time.sleep(2 ** attempt)
+                continue
+                
+            message = choices[0].get("message", {})
+            raw_text = message.get("content", "")
+            
+            parsed = _parse_response(raw_text)
+            return parsed, raw_text
 
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"OpenRouter HTTP Error: {e.response.status_code} - {e.response.text}")
-        return None, None
-    except Exception as e:
-        logger.exception(f"OpenRouter request failed: {e}")
-        return None, None
+        except requests.exceptions.HTTPError as e:
+            status_code = getattr(e.response, 'status_code', 'unknown')
+            text = getattr(e.response, 'text', 'unknown')
+            logger.error(f"OpenRouter HTTP Error (attempt {attempt+1}/{max_retries}): {status_code} - {text}")
+            if attempt == max_retries - 1:
+                return None, None
+            time.sleep(2 ** attempt)
+            
+        except Exception as e:
+            logger.warning(f"OpenRouter request failed (attempt {attempt+1}/{max_retries}): {e}")
+            if attempt == max_retries - 1:
+                return None, None
+            time.sleep(2 ** attempt)
+
+    return None, None

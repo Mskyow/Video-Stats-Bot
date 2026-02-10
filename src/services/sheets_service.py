@@ -33,10 +33,10 @@ from src.config import (
 logger = logging.getLogger(__name__)
 
 # Очередь для экспорта данных в Google Sheets
-_sheets_queue: asyncio.Queue[dict[str, Any]] | None = None
+_sheets_queue: asyncio.Queue[tuple[dict[str, Any], int | None]] | None = None
 
 
-def get_sheets_queue() -> asyncio.Queue[dict[str, Any]]:
+def get_sheets_queue() -> asyncio.Queue[tuple[dict[str, Any], int | None]]:
     """Lazy initialization of the queue."""
     global _sheets_queue
     if _sheets_queue is None:
@@ -71,33 +71,49 @@ REPORT_COLUMNS = [
 ]
 
 
-def queue_export(video_data: dict[str, Any]) -> None:
+def queue_export(video_data: dict[str, Any], chat_id: int | None = None) -> None:
     """
     Добавляет данные видео в очередь для экспорта в Google Sheets.
 
     Args:
         video_data: Словарь с данными видео для экспорта.
+        chat_id: ID чата для уведомления (опционально).
     """
     try:
         q = get_sheets_queue()
-        q.put_nowait(video_data)
+        # Добавляем кортеж (данные, chat_id)
+        q.put_nowait((video_data, chat_id))
         logger.debug("Queued video for sheets export: %s", video_data.get("title", "Unknown"))
     except asyncio.QueueFull:
         logger.warning("Sheets export queue is full, dropping video: %s", video_data.get("title", "Unknown"))
 
 
-async def sheets_worker() -> None:
+async def sheets_worker(bot) -> None:
     """
     Background worker для асинхронного экспорта данных в Google Sheets.
 
     Обрабатывает очередь _sheets_queue и вызывает export_video_to_sheet
     для каждого элемента в очереди.
+    
+    Args:
+        bot: Экземпляр бота для отправки уведомлений.
     """
     logger.info("Sheets worker started")
     q = get_sheets_queue()
+    
+    # Группируем успешные экспорты для одного чата, чтобы не спамить
+    # (простая реализация: отправляем сразу, но можно накапливать)
+    
     while True:
         try:
-            video_data = await q.get()
+            item = await q.get()
+            
+            # Поддержка старого формата (только dict) и нового (dict, chat_id)
+            if isinstance(item, tuple):
+                video_data, chat_id = item
+            else:
+                video_data, chat_id = item, None
+
             logger.debug("Processing video for sheets export: %s", video_data.get("title", "Unknown"))
 
             # export_video_to_sheet синхронная, запускаем в executor
@@ -105,9 +121,30 @@ async def sheets_worker() -> None:
             result = await loop.run_in_executor(None, export_video_to_sheet, video_data)
 
             if result:
-                logger.info("Successfully exported to sheets: %s", video_data.get("title", "Unknown"))
+                title = video_data.get("title", "Видео")
+                logger.info("Successfully exported to sheets: %s", title)
+                
+                # Отправляем уведомление пользователю, если есть chat_id
+                if chat_id:
+                    try:
+                        # Обрезаем длинный заголовок
+                        short_title = title[:30] + "..." if len(title) > 30 else title
+                        await bot.send_message(
+                            chat_id, 
+                            f"📊 <b>Google Sheets:</b> Данные сохранены!\nВидео: <i>{short_title}</i>"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to send sheet notification to {chat_id}: {e}")
             else:
                 logger.warning("Failed to export to sheets: %s", video_data.get("title", "Unknown"))
+                if chat_id:
+                     try:
+                        await bot.send_message(
+                            chat_id, 
+                            f"⚠️ <b>Google Sheets:</b> Не удалось сохранить видео.\n<i>{video_data.get('title', 'Unknown')}</i>"
+                        )
+                     except Exception:
+                         pass
 
             q.task_done()
         except asyncio.CancelledError:
@@ -115,7 +152,6 @@ async def sheets_worker() -> None:
             break
         except Exception as e:
             logger.exception("Error in sheets worker: %s", e)
-            # Продолжаем работу даже после ошибки
             await asyncio.sleep(1)
 
 

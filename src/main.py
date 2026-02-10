@@ -75,7 +75,7 @@ async def main() -> None:
     await setup_bot_commands(bot)
 
     # Запускаем воркер Google Sheets для асинхронного экспорта
-    asyncio.create_task(sheets_worker())
+    asyncio.create_task(sheets_worker(bot))
     logger.info("Background sheets worker started")
 
     if config.WEBHOOK_URL:
