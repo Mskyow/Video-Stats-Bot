@@ -42,8 +42,8 @@ from src.services.sheets_service import (
     _get_credentials,
     _get_client,
     _get_worksheet,
-    _sync_export_to_sheet,
-    queue_export_to_sheet,
+    export_video_to_sheet,
+    queue_export,
 )
 
 
@@ -170,7 +170,7 @@ class TestRowDataMapping:
 
         # H: Score
         assert isinstance(sample_ai_response_video["score"], (int, float))
-        assert 0 <= sample_ai_response_video["score"] <= 100
+        assert 0 <= sample_ai_response_video["score"] <= 10
 
         # I: Verdict
         assert sample_ai_response_video["verdict"] is not None
@@ -232,7 +232,7 @@ class TestSyncExportToSheet:
 
         with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test-creds"):
             with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "test-sheet"):
-                result = _sync_export_to_sheet(sample_ai_response_video)
+                result = export_video_to_sheet(sample_ai_response_video)
 
         assert result is True
         mock_worksheet.append_row.assert_called_once()
@@ -251,7 +251,7 @@ class TestSyncExportToSheet:
 
         with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test-creds"):
             with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "test-sheet"):
-                result = _sync_export_to_sheet(sample_ai_response_carousel)
+                result = export_video_to_sheet(sample_ai_response_carousel)
 
         assert result is True
         call_args = mock_worksheet.append_row.call_args[0][0]
@@ -273,7 +273,7 @@ class TestSyncExportToSheet:
 
         with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test-creds"):
             with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "test-sheet"):
-                result = _sync_export_to_sheet(minimal_data)
+                result = export_video_to_sheet(minimal_data)
 
         assert result is True
         call_args = mock_worksheet.append_row.call_args[0][0]
@@ -286,7 +286,7 @@ class TestSyncExportToSheet:
         """Should skip export when credentials not configured."""
         with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", None):
             with patch("src.services.sheets_service.GOOGLE_SHEET_CREDENTIALS_PATH", None):
-                result = _sync_export_to_sheet({})
+                result = export_video_to_sheet({})
 
         assert result is False
 
@@ -298,7 +298,7 @@ class TestSyncExportToSheet:
 
         with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test-creds"):
             with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "test-sheet"):
-                result = _sync_export_to_sheet({"content_type": "video", "metrics": {}})
+                result = export_video_to_sheet({"content_type": "video", "metrics": {}})
 
         assert result is False
 
@@ -309,7 +309,7 @@ class TestSyncExportToSheet:
 
         with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", None):
             with patch("src.services.sheets_service.GOOGLE_SHEET_CREDENTIALS_PATH", "/fake/path.json"):
-                result = _sync_export_to_sheet({"content_type": "video", "metrics": {}})
+                result = export_video_to_sheet({"content_type": "video", "metrics": {}})
 
         assert result is False
 
@@ -327,7 +327,7 @@ class TestRowStructure:
 
                 with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test"):
                     with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "test"):
-                        _sync_export_to_sheet(sample_ai_response_video)
+                        export_video_to_sheet(sample_ai_response_video)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
                 assert len(call_args) == 16
@@ -342,7 +342,7 @@ class TestRowStructure:
 
                 with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test"):
                     with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "test"):
-                        _sync_export_to_sheet(sample_ai_response_video)
+                        export_video_to_sheet(sample_ai_response_video)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
                 # Should be a timestamp string
@@ -358,7 +358,7 @@ class TestRowStructure:
 
                 with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test"):
                     with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "test"):
-                        _sync_export_to_sheet(sample_ai_response_video)
+                        export_video_to_sheet(sample_ai_response_video)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
                 assert call_args[2] == "Video"
@@ -373,7 +373,7 @@ class TestRowStructure:
 
                 with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test"):
                     with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "test"):
-                        _sync_export_to_sheet(sample_ai_response_carousel)
+                        export_video_to_sheet(sample_ai_response_carousel)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
                 assert call_args[2] == "Carousel"
@@ -388,7 +388,7 @@ class TestRowStructure:
 
                 with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test"):
                     with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "test"):
-                        _sync_export_to_sheet(sample_ai_response_video)
+                        export_video_to_sheet(sample_ai_response_video)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
                 retention = call_args[13]  # Column N (0-indexed: 13)
@@ -404,7 +404,7 @@ class TestRowStructure:
 
                 with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test"):
                     with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "test"):
-                        _sync_export_to_sheet(sample_ai_response_video)
+                        export_video_to_sheet(sample_ai_response_video)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
                 awt = call_args[14]  # Column O (0-indexed: 14)
@@ -421,7 +421,7 @@ class TestRowStructure:
 
                 with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test"):
                     with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "test"):
-                        _sync_export_to_sheet(sample_ai_response_video)
+                        export_video_to_sheet(sample_ai_response_video)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
                 er = call_args[15]  # Column P (0-indexed: 15)
@@ -439,7 +439,7 @@ class TestAsyncQueueExport:
         test_queue = asyncio.Queue()
 
         with patch("src.services.sheets_service._export_queue", test_queue):
-            await queue_export_to_sheet(sample_ai_response_video)
+            await queue_export(sample_ai_response_video)
 
             # Verify data was added to queue
             assert test_queue.qsize() == 1

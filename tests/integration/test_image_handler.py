@@ -118,7 +118,7 @@ class TestConvertAiResultToProcessingResult:
         ai_result = {
             "hook_text": "Hook Text Here",
             "video_title": None,
-            "score": 50,
+            "score": 5.0,
             "verdict": "🟡 ITERATE",
             "metrics": {"views": 1000},
         }

@@ -70,28 +70,28 @@ class TestParseResponse:
 
     def test_parse_direct_json(self):
         """Should parse direct JSON response."""
-        data = [{"content_type": "video", "score": 75}]
+        data = [{"content_type": "video", "score": 7.5}]
         text = json.dumps(data)
         result = _parse_response(text)
         assert result == data
 
     def test_parse_json_object_wrapped_in_list(self):
         """Should wrap single dict in list."""
-        data = {"content_type": "video", "score": 75}
+        data = {"content_type": "video", "score": 7.5}
         text = json.dumps(data)
         result = _parse_response(text)
         assert result == [data]
 
     def test_parse_markdown_code_block(self):
         """Should extract JSON from markdown code block."""
-        data = [{"content_type": "carousel", "score": 60}]
+        data = [{"content_type": "carousel", "score": 6.0}]
         text = f"```json\n{json.dumps(data)}\n```"
         result = _parse_response(text)
         assert result == data
 
     def test_parse_embedded_json(self):
         """Should extract JSON embedded in text."""
-        data = [{"content_type": "video", "score": 80}]
+        data = [{"content_type": "video", "score": 8.0}]
         text = f"Here is the analysis: {json.dumps(data)} Thanks!"
         result = _parse_response(text)
         assert result == data
@@ -189,9 +189,9 @@ class TestResponseStructureValidation:
         assert any(emoji in verdict for emoji in ["🔴", "🟡", "🟢", "✂️", "🚀"])
 
     def test_score_range(self, sample_ai_response_video):
-        """score should be between 0 and 100."""
+        """score should be between 0 and 10."""
         score = sample_ai_response_video["score"]
-        assert 0 <= score <= 100
+        assert 0 <= score <= 10
 
     def test_recommendations_is_list(self, sample_ai_response_video):
         """recommendations should be a list."""
@@ -302,7 +302,7 @@ class TestAnalyzeScreenshot:
                         "content_type": "video",
                         "hook_text": "Fallback Title",
                         "video_title": None,  # Missing title
-                        "score": 50,
+                        "score": 5.0,
                         "verdict": "🟡 ITERATE",
                         "metrics": {"views": 1000},
                     }])

@@ -46,7 +46,7 @@ def sample_ai_response_video() -> dict[str, Any]:
             "photos_viewed": None,
             "total_photos": None,
         },
-        "score": 78,
+        "score": 7.8,
         "verdict": "🚀 SCALE HARD",
         "analysis": "Отличный хук с высоким retention. Видео набирает хорошую аудиторию.",
         "recommendations": [
@@ -80,7 +80,7 @@ def sample_ai_response_carousel() -> dict[str, Any]:
             "photos_viewed": 3.2,
             "total_photos": 5,
         },
-        "score": 65,
+        "score": 6.5,
         "verdict": "🟡 ITERATE",
         "analysis": "Хороший ER, но completion rate можно улучшить. Пробуй более цепляющие слайды.",
         "recommendations": [
@@ -114,7 +114,7 @@ def sample_ai_response_kill() -> dict[str, Any]:
             "photos_viewed": None,
             "total_photos": None,
         },
-        "score": 25,
+        "score": 2.5,
         "verdict": "🔴 KILL HOOK",
         "analysis": "Низкий retention указывает на слабый хук. Нужно полностью переделать начало.",
         "recommendations": [
@@ -146,7 +146,7 @@ def sample_ai_batch_response() -> list[dict[str, Any]]:
                 "retention_3s": 70.0,
                 "avg_watch_time_pct": 60.0,
             },
-            "score": 75,
+            "score": 7.5,
             "verdict": "🚀 SCALE HARD",
             "analysis": "Хорошие показатели",
             "recommendations": ["Масштабируй"]
@@ -168,7 +168,7 @@ def sample_ai_batch_response() -> list[dict[str, Any]]:
                 "photos_viewed": 2.8,
                 "total_photos": 6,
             },
-            "score": 55,
+            "score": 5.5,
             "verdict": "✂️ FIX BODY",
             "analysis": "Нужны правки",
             "recommendations": ["Улучши середину"]
@@ -204,7 +204,7 @@ def mock_openrouter_response() -> Mock:
                             "retention_3s": 70.0,
                             "avg_watch_time_pct": 60.0,
                         },
-                        "score": 70,
+                        "score": 7.0,
                         "verdict": "🟡 ITERATE",
                         "analysis": "Test analysis",
                         "recommendations": ["Test recommendation"]
@@ -270,7 +270,7 @@ def sample_db_video_record() -> dict[str, Any]:
             "hook_type": "short",
             "age_hours": 48.5,
         },
-        "score": 78.0,
+        "score": 7.8,
         "analysis": "Отличный хук с высоким retention.",
         "verdict": "🚀 SCALE HARD",
         "hook_score": "good",
@@ -349,7 +349,7 @@ def sample_sheets_row_data() -> dict[str, Any]:
         "platform": "Tiktok",
         "video_title": "3 способа заработать на нейросетях",
         "hook_type": "short",
-        "score": 78,
+        "score": 7.8,
         "verdict": "🚀 SCALE HARD",
         "views": 15000,
         "likes": 1200,

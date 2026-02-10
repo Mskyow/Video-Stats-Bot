@@ -210,11 +210,13 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
         title = result_json.get("video_title") or f"Video #{index}"
         score = result_json.get("score", 0)
         
-        # Определение рейтинга для краткости (Kill/Iterate/Scale)
+        # Определение рейтинга для краткости (Kill/Fix/Iterate/Scale)
         verdict = result_json.get("verdict", "")
         rating_label = "N/A"
         if "KILL" in verdict:
             rating_label = "Kill"
+        elif "FIX" in verdict:
+            rating_label = "Fix"
         elif "ITERATE" in verdict:
             rating_label = "Iterate"
         elif "SCALE" in verdict:
@@ -260,7 +262,7 @@ def build_summary_report(results: list[VideoProcessingResult], saved: int, faile
             if len(title) > 20:
                 title = title[:20] + "..."
             
-            line = f"{res.index}. [{platform}] '{title}' — {res.score}/100 ({res.rating_label})"
+            line = f"{res.index}. [{platform}] '{title}' — {res.score}/10 ({res.rating_label})"
             lines.append(line)
         else:
             # Ошибки

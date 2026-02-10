@@ -102,7 +102,7 @@ def format_report(data: dict[str, Any]) -> str:
         age_str = ""
 
     # Заголовок с вердиктом и оценкой
-    score_str = f"{score}/100" if isinstance(score, (int, float)) else "—"
+    score_str = f"{score}/10" if isinstance(score, (int, float)) else "—"
     lines.append(f"<b>{verdict}</b> | {score_str}")
 
     # Платформа, длительность и возраст
