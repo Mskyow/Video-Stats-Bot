@@ -388,12 +388,16 @@ def _build_row(video_data: dict[str, Any]) -> list[str]:
     shares_str = _format_number(shares)
 
     # 14. Retention - удержание аудитории
-    retention = video_data.get("retention")
+    retention = metrics.get("retention_3s")
+    if retention is None:
+        retention = video_data.get("retention_3s") # Fallback to top-level if legacy structure
     retention_str = _format_percentage(retention)
 
     # 15. Watch Time - время просмотра
-    watch_time = video_data.get("watch_time")
-    watch_time_str = _format_number(watch_time)
+    watch_time = metrics.get("avg_watch_time_pct")
+    if watch_time is None:
+        watch_time = video_data.get("avg_watch_time_pct") # Fallback
+    watch_time_str = _format_percentage(watch_time) # Use percentage formatting for watch time pct
 
     # 16. ER - Engagement Rate (с дорасчетом если нужно)
     aggregated_er = video_data.get("aggregated_er")

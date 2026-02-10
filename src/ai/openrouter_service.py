@@ -115,6 +115,7 @@ SYSTEM_PROMPT = (
     "     - **Carousel:** Look for 'Photos Viewed' (e.g. 2.1). Calculate: (Photos Viewed / Total Photos) * 100. If total unknown, leave null.\n"
     "   - **Retention at 3s:**\n"
     "     - Locate the Retention Graph. Identify the value at the 3-second mark (`retention_3s`).\n"
+    "   - **IMPORTANT:** Ensure `metrics.retention_3s` and `metrics.avg_watch_time_pct` are filled in the JSON output. If exact numbers are not visible but can be estimated from the graph, provide the estimate.\n"
     "   - **Hook Text (Secondary/Backup):**\n"
     "     - **IF** `hook_text` was NOT found in Step 5, try to OCR text from the thumbnail associated with the Retention Graph.\n"
     "\n"
