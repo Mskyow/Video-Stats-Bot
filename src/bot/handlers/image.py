@@ -11,7 +11,8 @@ from typing import Any
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramNetworkError
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.fsm.context import FSMContext
 
 from src.ai.openrouter_service import analyze_screenshot
 from src.config import GOOGLE_SHEET_ID
@@ -29,7 +30,7 @@ class VideoProcessingResult:
     index: int
     video_title: str | None = None
     success: bool = False
-    score: int = 0
+    score: float = 0.0
     rating_label: str = "N/A"
     error_message: str | None = None
     ai_result: dict[str, Any] | None = None
@@ -69,15 +70,47 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     if total_videos == 0:
         return
 
+    # Отправляем сообщение о начале обработки
     processing_msg = await message.answer(
-        f"⏳ Получено изображений: {len(messages)}. \n"
-        f"Анализирую {len(pairs)} видео параллельно... Это может занять 15-30 секунд."
+        f"⏳ <b>Начинаю обработку...</b>\n"
+        f"Видео в очереди: {len(pairs)}\n"
+        f"⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️ 0%"
     )
 
     # 2. Параллельная обработка (The Engine)
     tasks = []
+    
+    # Создаем shared counter для прогресса
+    progress_counter = {"processed": 0, "total": len(pairs)}
+    
+    async def update_progress():
+        progress_counter["processed"] += 1
+        processed = progress_counter["processed"]
+        total = progress_counter["total"]
+        percent = int((processed / total) * 100)
+        
+        try:
+            bar_len = 10
+            filled = int(bar_len * processed / total)
+            # Красивый прогресс бар
+            bar = "🟩" * filled + "⬜️" * (bar_len - filled)
+            
+            await processing_msg.edit_text(
+                f"⏳ <b>Обработка видео...</b>\n"
+                f"Готово: {processed} из {total}\n"
+                f"{bar} {percent}%"
+            )
+        except Exception:
+            pass
+
     for idx, (msg1, msg2) in enumerate(pairs, start=1):
-        tasks.append(process_single_video(idx, msg1, msg2, bot))
+        # Оборачиваем process_single_video для обновления прогресса
+        async def task_wrapper(i, m1, m2, b):
+            res = await process_single_video(i, m1, m2, b)
+            await update_progress()
+            return res
+            
+        tasks.append(task_wrapper(idx, msg1, msg2, bot))
 
     # Добавляем "орфанные" (непарные) как ошибки
     results: list[VideoProcessingResult] = []
@@ -112,6 +145,7 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     # 3. Сохранение данных (Fault Tolerance: сохраняем то, что успешно)
     saved_count = 0
     failed_count = 0
+    duplicate_count = 0
     
     user_id = message.from_user.id if message.from_user else 0
     supabase = get_supabase()
@@ -121,19 +155,26 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
             try:
                 # Сохранение в Supabase
                 if supabase and user_id:
-                    await asyncio.to_thread(
+                    insert_res = await asyncio.to_thread(
                         insert_video,
                         supabase,
                         user_id,
                         res.ai_result,
                         res.raw_response,
                     )
+                    
+                    if insert_res and insert_res.get("duplicate"):
+                        res.error_message = "♻️ Дубликат (уже сохранено)"
+                        # Не считаем успешным сохранением, но и не ошибка обработки
+                        duplicate_count += 1
+                        # Дубликаты не экспортируем в Sheets повторно? 
+                        # Логика: если дубликат, то не сохраняем
+                    else:
+                        saved_count += 1
+                        # Экспорт в Google Sheets через очередь (асинхронно)
+                        if GOOGLE_SHEET_ID:
+                            queue_export(res.ai_result)
                 
-                # Экспорт в Google Sheets через очередь (асинхронно)
-                if GOOGLE_SHEET_ID:
-                    queue_export(res.ai_result)
-                
-                saved_count += 1
             except Exception as e:
                 logger.error(f"Failed to save video {res.index}: {e}")
                 # Не помечаем как failed для юзера, так как анализ прошел, проблема на бэкенде
@@ -142,13 +183,41 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
             failed_count += 1
 
     # 4. Формирование отчета (UX)
-    report_text = build_summary_report(results, saved_count, failed_count, len(messages))
+    # Считаем реальные ошибки (failed_count включает в себя и дубликаты, если они не сохранены)
+    # Но в нашей логике выше: если дубликат, мы делаем duplicate_count += 1, и НЕ делаем saved_count += 1
+    # failed_count инкрементится только если res.success == False.
+    # Значит, дубликаты (у которых res.success=True, но error_message="Дубликат") не попадают в failed_count.
+    # Проверим логику выше:
+    # if res.success: -> check duplicate -> duplicate_count++ OR saved_count++
+    # else: failed_count++
+    # Итого: total = saved + duplicates + failed
+    
+    report_text = build_summary_report(results, saved_count, failed_count, duplicate_count)
 
-    # Отправка отчета
-    try:
-        await processing_msg.edit_text(report_text)
-    except Exception:
-        await message.answer(report_text)
+    # Кнопки
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+    buttons = []
+    
+    if GOOGLE_SHEET_ID:
+        url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}"
+        buttons.append(InlineKeyboardButton(text="📊 Google Sheet", url=url))
+        
+    buttons.append(InlineKeyboardButton(text="🚪 Выйти из режима загрузки", callback_data="exit_upload_mode"))
+    # Располагаем кнопки вертикально
+    for btn in buttons:
+        keyboard.inline_keyboard.append([btn])
+
+    await processing_msg.edit_text(report_text, reply_markup=keyboard)
+
+@router.callback_query(F.data == "exit_upload_mode")
+async def cb_exit_upload_mode(callback: CallbackQuery, state: FSMContext):
+    """Выход из режима загрузки по кнопке."""
+    await state.clear()
+    await callback.message.edit_text(
+        "✅ Режим загрузки завершён.\nДля новой загрузки используй /upload",
+        reply_markup=None
+    )
+    await callback.answer("Режим загрузки отключен")
 
 
 async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bot) -> VideoProcessingResult:
@@ -208,7 +277,7 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
 
         # Успешный анализ
         title = result_json.get("video_title") or f"Video #{index}"
-        score = result_json.get("score", 0)
+        score = float(result_json.get("score", 0))
         
         # Определение рейтинга для краткости (Kill/Fix/Iterate/Scale)
         verdict = result_json.get("verdict", "")
@@ -241,33 +310,75 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
         )
 
 
-def build_summary_report(results: list[VideoProcessingResult], saved: int, failed: int, total_images: int) -> str:
+def build_summary_report(results: list[VideoProcessingResult], saved: int, failed: int, duplicates: int) -> str:
     """Формирует итоговое сообщение для пользователя."""
-    
+
+    total_videos = len(results)
     header = (
-        "✅ **Batch Processing Complete**\n"
-        f"📥 Received: {len(results)} videos ({total_images} images)\n"
-        f"💾 Saved: {saved}\n"
-        f"❌ Failed: {failed}\n\n"
-        "**Details:**"
+        f"✅ <b>Готово: {total_videos} видео</b>\n"
+        f"💾 Сохранено: {saved} | ♻️ Дубликатов: {duplicates} | ❌ Ошибок: {failed}\n"
     )
     
     lines = []
     for res in results:
-        if res.success:
-            # 1. [TikTok] 'Title' — 92/100 (Scale)
-            platform = res.ai_result.get("platform", "Unknown").capitalize() if res.ai_result else "Video"
-            # Обрезаем заголовок если длинный
+        # Проверяем, является ли результат дубликатом
+        is_duplicate = res.error_message and "дубликат" in res.error_message.lower()
+
+        if res.success and not is_duplicate:
+            # Успешный анализ и не дубликат
+            platform = res.ai_result.get("platform", "Unknown") if res.ai_result else "Video"
+            # Нормализация платформы
+            if "instagram" in platform.lower():
+                platform = "Instagram"
+            elif "youtube" in platform.lower():
+                platform = "YouTube"
+            elif "tiktok" in platform.lower():
+                platform = "TikTok"
+            else:
+                platform = platform.capitalize()
+
+            # Обрезаем заголовок
             title = res.video_title or "Untitled"
-            if len(title) > 20:
-                title = title[:20] + "..."
+            if len(title) > 25:
+                title = title[:24] + "…"
             
-            line = f"{res.index}. [{platform}] '{title}' — {res.score}/10 ({res.rating_label})"
+            # Эмодзи по скору
+            score = res.score
+            emoji = "⚪"
+            if score >= 8.0:
+                emoji = "🟢"  # Отлично
+            elif score >= 5.5:
+                emoji = "🟡"  # Норм/Так себе
+            else:
+                emoji = "🔴"  # Плохо
+
+            line = f"{emoji} {res.index}. [{platform}] {title} — {score}/10"
             lines.append(line)
+            
+        elif is_duplicate:
+            # Дубликат
+            platform = res.ai_result.get("platform", "Unknown") if res.ai_result else "Video"
+            if "instagram" in platform.lower(): platform = "Instagram"
+            elif "youtube" in platform.lower(): platform = "YouTube"
+            elif "tiktok" in platform.lower(): platform = "TikTok"
+            else: platform = platform.capitalize()
+            
+            title = res.video_title or "Untitled"
+            if len(title) > 25: title = title[:24] + "…"
+            
+            line = f"♻️ {res.index}. [{platform}] {title} — Дубликат"
+            lines.append(line)
+            
         else:
-            # Ошибки
+            # Ошибка (res.success == False)
             error_msg = res.error_message or "Unknown error"
-            line = f"{res.index}. {error_msg}"
+            # Упрощаем текст ошибки для списка
+            if "непарный" in error_msg.lower():
+                error_msg = "Непарный скриншот"
+            elif "не смог распознать" in error_msg.lower():
+                error_msg = "AI не распознал"
+            
+            line = f"❌ {res.index}. {error_msg}"
             lines.append(line)
             
     return header + "\n" + "\n".join(lines)
