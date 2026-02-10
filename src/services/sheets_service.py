@@ -33,7 +33,16 @@ from src.config import (
 logger = logging.getLogger(__name__)
 
 # Очередь для экспорта данных в Google Sheets
-_sheets_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+_sheets_queue: asyncio.Queue[dict[str, Any]] | None = None
+
+
+def get_sheets_queue() -> asyncio.Queue[dict[str, Any]]:
+    """Lazy initialization of the queue."""
+    global _sheets_queue
+    if _sheets_queue is None:
+        _sheets_queue = asyncio.Queue()
+    return _sheets_queue
+
 
 # Константы для retry-логики
 MAX_RETRIES = 3
@@ -70,7 +79,8 @@ def queue_export(video_data: dict[str, Any]) -> None:
         video_data: Словарь с данными видео для экспорта.
     """
     try:
-        _sheets_queue.put_nowait(video_data)
+        q = get_sheets_queue()
+        q.put_nowait(video_data)
         logger.debug("Queued video for sheets export: %s", video_data.get("title", "Unknown"))
     except asyncio.QueueFull:
         logger.warning("Sheets export queue is full, dropping video: %s", video_data.get("title", "Unknown"))
@@ -84,9 +94,10 @@ async def sheets_worker() -> None:
     для каждого элемента в очереди.
     """
     logger.info("Sheets worker started")
+    q = get_sheets_queue()
     while True:
         try:
-            video_data = await _sheets_queue.get()
+            video_data = await q.get()
             logger.debug("Processing video for sheets export: %s", video_data.get("title", "Unknown"))
 
             # export_video_to_sheet синхронная, запускаем в executor
@@ -98,7 +109,7 @@ async def sheets_worker() -> None:
             else:
                 logger.warning("Failed to export to sheets: %s", video_data.get("title", "Unknown"))
 
-            _sheets_queue.task_done()
+            q.task_done()
         except asyncio.CancelledError:
             logger.info("Sheets worker cancelled")
             break

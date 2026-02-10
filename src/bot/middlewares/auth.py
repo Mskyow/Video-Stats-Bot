@@ -64,16 +64,25 @@ class AuthMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         user_id = event.from_user.id
-        # Проверяем секретный код в сообщении
-        text = getattr(event, "text", "") or ""
-        clean_text = text.strip()
-        is_secret_code = clean_text == AUTH_SECRET
+        # Проверяем секретный код в сообщении (или в подписи)
+        # Поддержка текста и caption (на случай, если пришлют скрин с кодом)
+        msg_text = event.text or event.caption or ""
+        clean_text = msg_text.strip()
+        
+        # Логируем попытку (для отладки)
+        # logger.info(f"Auth check for {user_id}: text='{clean_text}'")
 
-        # Support /start CODE
-        if not is_secret_code and clean_text.startswith("/start "):
-            parts = clean_text.split(maxsplit=1)
-            if len(parts) > 1 and parts[1].strip() == AUTH_SECRET:
+        is_secret_code = False
+        if AUTH_SECRET:
+            # Сравниваем case-insensitive (чтобы работало и happypeople, и HAPPYPEOPLE)
+            if clean_text.lower() == AUTH_SECRET.lower():
                 is_secret_code = True
+            
+            # Support /start CODE
+            elif clean_text.lower().startswith("/start "):
+                parts = clean_text.split(maxsplit=1)
+                if len(parts) > 1 and parts[1].strip().lower() == AUTH_SECRET.lower():
+                    is_secret_code = True
 
         # Проверяем текущий статус
         status = await asyncio.to_thread(
