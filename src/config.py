@@ -87,7 +87,7 @@ GOOGLE_SHEET_WORKSHEET_NAME: str = _get_optional("GOOGLE_SHEET_WORKSHEET_NAME") 
 REPORT_CHAT_ID: int | None = int(v) if (v := _get_optional("REPORT_CHAT_ID")) else None
 
 # Лимит одновременных запросов к AI
-MAX_CONCURRENT_ANALYSIS: int = max(1, _get_int_optional("MAX_CONCURRENT_ANALYSIS", 4))
+MAX_CONCURRENT_ANALYSIS: int = max(1, _get_int_optional("MAX_CONCURRENT_ANALYSIS", 5))
 # Тайм-аут одного запроса к OpenRouter (сек)
 OPENROUTER_TIMEOUT_SEC: float = max(10.0, _get_float_optional("OPENROUTER_TIMEOUT_SEC", 120.0))
 # Количество HTTP retry при сетевых/5xx ошибках OpenRouter
