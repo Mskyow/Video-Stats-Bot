@@ -14,6 +14,7 @@ from src.ai.day_summary import (
     _build_summary_prompt,
     _cache,
     _parse_summary_response,
+    _render_summary_payload,
     _validate_summary_payload,
     generate_day_summary,
 )
@@ -182,6 +183,21 @@ class TestSummaryPayloadValidation:
         assert "Лучшие хуки" in parsed
         assert "Лучшие кейсы за сегодня" in parsed
         assert "Что делать сегодня" in parsed
+
+    def test_render_summary_escapes_untrusted_html(self) -> None:
+        payload = {
+            "overview": "За сутки retention 3s <58% в 2 роликах.",
+            "best_hooks": ["Hook <strong>alpha</strong> дал 72%."],
+            "worked_today": ["Share rate >1.5% в 3 видео."],
+            "best_cases": ["Кейс: score 8.7 и retention <60%."],
+            "recommendations": ["Фикси группы с retention <58%.", "Тестируй 2 варианта."],
+            "evidence_refs": ["hook_type.short"],
+        }
+
+        rendered = _render_summary_payload(payload)
+        assert "&lt;58%" in rendered
+        assert "&lt;strong&gt;alpha&lt;/strong&gt;" in rendered
+        assert "<b>📊 Общая картина:</b>" in rendered
 
 
 class TestGenerateDaySummary:

@@ -8,6 +8,7 @@ an actionable summary constrained by facts and thresholds.
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import logging
 import re
@@ -761,14 +762,19 @@ def _validate_summary_payload(payload: dict[str, Any] | None) -> tuple[bool, lis
 
 
 def _render_summary_payload(payload: dict[str, Any]) -> str:
-    best_hooks_lines = [f"• {item.strip()}" for item in payload.get("best_hooks", [])]
-    worked_today_lines = [f"• {item.strip()}" for item in payload.get("worked_today", [])]
-    best_cases_lines = [f"• {item.strip()}" for item in payload.get("best_cases", [])]
-    recommendations_lines = [f"• {item.strip()}" for item in payload.get("recommendations", [])]
+    # Keep only our own trusted HTML tags (<b> section titles).
+    # All dynamic content from AI/fallback is escaped to avoid Telegram HTML parse errors.
+    overview_line = html.escape(str(payload.get("overview", "")).strip(), quote=False)
+    best_hooks_lines = [f"• {html.escape(item.strip(), quote=False)}" for item in payload.get("best_hooks", [])]
+    worked_today_lines = [f"• {html.escape(item.strip(), quote=False)}" for item in payload.get("worked_today", [])]
+    best_cases_lines = [f"• {html.escape(item.strip(), quote=False)}" for item in payload.get("best_cases", [])]
+    recommendations_lines = [
+        f"• {html.escape(item.strip(), quote=False)}" for item in payload.get("recommendations", [])
+    ]
 
     sections = [
         "<b>📊 Общая картина:</b>",
-        payload.get("overview", "").strip(),
+        overview_line,
         "",
         "<b>🎣 Лучшие хуки:</b>",
         "\n".join(best_hooks_lines) if best_hooks_lines else "• недостаточно данных",
