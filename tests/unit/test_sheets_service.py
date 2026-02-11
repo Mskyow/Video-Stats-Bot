@@ -39,6 +39,7 @@ mock_config.SHEETS_WRITE_DELAY = 1.0
 sys.modules["src.config"] = mock_config
 
 from src.services.sheets_service import (
+    _build_row,
     _get_credentials,
     _get_client,
     _get_worksheet,
@@ -285,6 +286,28 @@ class TestSyncExportToSheet:
         assert call_args[2] == "video"  # Default content type
         assert call_args[9] == "100"  # Views
 
+    @patch("src.services.sheets_service._get_client")
+    @patch("src.services.sheets_service._get_worksheet")
+    def test_export_normalizes_verdict_for_sheet(self, mock_get_worksheet, mock_get_client):
+        """Should normalize color-based verdict label to emoji format."""
+        mock_worksheet = Mock()
+        mock_worksheet.append_row = Mock()
+        mock_get_worksheet.return_value = mock_worksheet
+
+        data = {
+            "content_type": "video",
+            "verdict": "Color Yellow (ITERATE - ADD CTA)",
+            "metrics": {"views": 123},
+        }
+
+        with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test-creds"):
+            with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "test-sheet"):
+                result = export_video_to_sheet(data)
+
+        assert result is True
+        call_args = mock_worksheet.append_row.call_args[0][0]
+        assert call_args[8] == "🟡 ITERATE (ADD CTA)"
+
     def test_export_skipped_when_not_configured(self):
         """Should skip export when credentials not configured."""
         with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", None):
@@ -484,3 +507,20 @@ class TestDataCompatibility:
 
         for col, value in metric_mappings.items():
             assert value is not None, f"Missing metric for column: {col}"
+
+
+class TestVerdictNormalizationForSheets:
+    """Tests for verdict normalization before Google Sheets export."""
+
+    def test_verdict_color_format_converted_to_emoji(self):
+        """Should convert legacy color format to emoji verdict format."""
+        row = _build_row(
+            {
+                "content_type": "video",
+                "verdict": "Color Yellow (ITERATE - ADD CTA)",
+                "metrics": {},
+            }
+        )
+
+        # Column I (index 8): Verdict
+        assert row[8] == "🟡 ITERATE (ADD CTA)"

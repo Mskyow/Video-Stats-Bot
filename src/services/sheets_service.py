@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -356,6 +357,60 @@ def _safe_get(data: dict[str, Any], key: str, default: str = "-") -> str:
     return str(value)
 
 
+def _normalize_verdict_for_sheet(verdict: Any) -> str:
+    """
+    Нормализует verdict к компактному формату с эмодзи для Google Sheets.
+
+    Пример:
+        "Color Yellow (ITERATE - ADD CTA)" -> "🟡 ITERATE (ADD CTA)"
+    """
+    if verdict is None:
+        return "-"
+
+    raw = str(verdict).strip()
+    if not raw:
+        return "-"
+
+    normalized = re.sub(r"\s+", " ", raw)
+    upper = normalized.upper()
+
+    verdict_order = ("KILL", "FIX", "ITERATE", "SCALE")
+    target = next((v for v in verdict_order if v in upper), None)
+    if not target:
+        return normalized
+
+    emoji_by_target = {
+        "KILL": "🔴",
+        "FIX": "✂️",
+        "ITERATE": "🟡",
+        "SCALE": "🚀",
+    }
+    emoji = emoji_by_target[target]
+
+    # Если ключевой verdict уже упакован в скобки — используем этот фрагмент как приоритетный.
+    parenthesized = re.search(r"\(([^)]*)\)", normalized)
+    source = normalized
+    if parenthesized:
+        inside = parenthesized.group(1).strip()
+        if target in inside.upper():
+            source = inside
+
+    tail = ""
+    matched = re.search(rf"\b{target}\b\s*(.*)$", source, flags=re.IGNORECASE)
+    if matched:
+        tail = matched.group(1).strip()
+        tail = re.sub(r"^[-–—:/|]+\s*", "", tail)
+        if tail.startswith("(") and tail.endswith(")"):
+            tail = tail[1:-1].strip()
+
+    if tail:
+        if target == "ITERATE":
+            return f"{emoji} {target} ({tail})"
+        return f"{emoji} {target} {tail}"
+
+    return f"{emoji} {target}"
+
+
 def _build_row(video_data: dict[str, Any]) -> list[str]:
     """
     Формирует строку данных для экспорта в REPORT_COLUMNS формат.
@@ -398,7 +453,7 @@ def _build_row(video_data: dict[str, Any]) -> list[str]:
     score_str = _format_number(score) if score is not None else "-"
 
     # 9. Verdict - вердикт
-    verdict = _safe_get(video_data, "verdict", "-")
+    verdict = _normalize_verdict_for_sheet(video_data.get("verdict"))
 
     # 10-14. Metrics: Views, Likes, Comments, Shares, Saves
     metrics = video_data.get("metrics") or {}
