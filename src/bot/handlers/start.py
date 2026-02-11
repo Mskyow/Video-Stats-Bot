@@ -129,7 +129,7 @@ async def cmd_stats(message: Message) -> None:
         f"📊 <b>Твоя статистика</b>",
         "",
         f"📋 Анализов: <b>{total}</b>",
-        f"📈 Средний балл: <b>{avg}/100</b>",
+        f"📈 Средний балл: <b>{avg}/10</b>",
     ]
 
     if verdicts:

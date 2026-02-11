@@ -131,9 +131,9 @@ async def main() -> None:
             
             if not videos:
                 try:
-                     await bot_instance.send_message(chat_id, "📊 За последние 24 часа нет анализов.")
+                    await bot_instance.send_message(chat_id, "📊 За последние 24 часа нет анализов.")
                 except Exception as e:
-                     logger.warning(f"Failed to send empty report: {e}")
+                    logger.warning("Failed to send empty report: %s", e)
                 return
 
             # Group by platform

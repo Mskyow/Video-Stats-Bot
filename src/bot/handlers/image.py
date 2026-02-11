@@ -43,6 +43,31 @@ class VideoProcessingResult:
     is_orphan: bool = False  # Если не хватило пары (нечетное кол-во)
 
 
+def _format_processing_exception(exc: Exception) -> str:
+    """
+    Приводит технические исключения к коротким пользовательским сообщениям.
+    """
+    if isinstance(exc, TelegramNetworkError):
+        return "⚠️ Telegram временно недоступен. Проверь интернет и повтори через 1-2 минуты."
+
+    if isinstance(exc, TimeoutError):
+        return "⚠️ Превышен тайм-аут при обработке. Повтори отправку этой пары скриншотов."
+
+    text = str(exc).strip()
+    lowered = text.lower()
+
+    if any(token in lowered for token in ("429", "rate limit", "too many requests")):
+        return "⚠️ Лимит AI-запросов временно достигнут. Повтори через 1-2 минуты."
+    if any(token in lowered for token in ("timeout", "timed out")):
+        return "⚠️ Запрос обрабатывался слишком долго. Попробуй ещё раз."
+    if any(token in lowered for token in ("connection", "network", "dns", "unreachable")):
+        return "⚠️ Сетевая ошибка при обработке. Проверь интернет и повтори попытку."
+
+    if text:
+        return f"⚠️ Ошибка обработки: {text[:160]}"
+    return "⚠️ Непредвиденная ошибка обработки. Повтори попытку."
+
+
 @router.message(F.photo)
 async def handle_photo(message: Message, bot: Bot, album: list[Message] | None = None) -> None:
     """
@@ -57,6 +82,7 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     """
     # Если middleware не передал album, используем само сообщение как список из 1
     messages = album or [message]
+    user_id = message.from_user.id if message.from_user else 0
     
     # 1. Сортировка и валидация
     messages.sort(key=lambda m: m.message_id)
@@ -74,6 +100,15 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     total_videos = len(pairs) + len(orphans)
     if total_videos == 0:
         return
+
+    batch_id = f"{user_id or 'unknown'}:{message.message_id}"
+    logger.info(
+        "Start batch processing id=%s user_id=%s pairs=%s orphans=%s",
+        batch_id,
+        user_id,
+        len(pairs),
+        len(orphans),
+    )
 
     # Отправляем сообщение о начале обработки
     processing_msg = await message.answer(
@@ -112,7 +147,7 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     for idx, (msg1, msg2) in enumerate(pairs, start=1):
         # Оборачиваем process_single_video для обновления прогресса
         async def task_wrapper(i, m1, m2, b):
-            res = await process_single_video(i, m1, m2, b)
+            res = await process_single_video(i, m1, m2, b, batch_id=batch_id)
             await update_progress()
             return res
             
@@ -130,7 +165,7 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
                 results.append(res)
             elif isinstance(res, Exception):
                 # Критическая ошибка в таске (не должна случаться, т.к. внутри catch-all)
-                logger.error("Critical error in worker task: %s", res)
+                logger.error("Critical error in worker task batch_id=%s: %s", batch_id, res)
                 # Добавляем заглушку ошибки
                 results.append(VideoProcessingResult(index=0, success=False, error_message=str(res)))
 
@@ -152,7 +187,6 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     failed_count = 0
     duplicate_count = 0
     
-    user_id = message.from_user.id if message.from_user else 0
     supabase = get_supabase()
 
     for res in results:
@@ -178,7 +212,12 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
                             saved_count += 1
                             
                     except Exception as e:
-                        logger.error(f"Failed to save video {res.index} to Supabase: {e}")
+                        logger.exception(
+                            "Failed to save video to Supabase batch_id=%s video_index=%s: %s",
+                            batch_id,
+                            res.index,
+                            e,
+                        )
                         # Считаем успешным, так как анализ прошел
                         saved_count += 1
                 else:
@@ -191,7 +230,12 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
                     queue_export(res.ai_result)
                 
             except Exception as e:
-                logger.error(f"Failed to process result for video {res.index}: {e}")
+                logger.exception(
+                    "Failed to process post-AI result batch_id=%s video_index=%s: %s",
+                    batch_id,
+                    res.index,
+                    e,
+                )
                 # Если упало на верхнем уровне
                 if not is_duplicate:
                      saved_count += 1
@@ -224,6 +268,15 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
         keyboard.inline_keyboard.append([btn])
 
     await processing_msg.edit_text(report_text, reply_markup=keyboard)
+    logger.info(
+        "Finished batch id=%s user_id=%s total=%s saved=%s duplicates=%s failed=%s",
+        batch_id,
+        user_id,
+        len(results),
+        saved_count,
+        duplicate_count,
+        failed_count,
+    )
 
 @router.callback_query(F.data == "exit_upload_mode")
 async def cb_exit_upload_mode(callback: CallbackQuery, state: FSMContext):
@@ -236,13 +289,26 @@ async def cb_exit_upload_mode(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Режим загрузки отключен")
 
 
-async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bot) -> VideoProcessingResult:
+async def process_single_video(
+    index: int,
+    msg1: Message,
+    msg2: Message,
+    bot: Bot,
+    batch_id: str | None = None,
+) -> VideoProcessingResult:
     """
     Скачивает два фото, отправляет в AI, возвращает результат.
     Не падает при ошибках (Fault Tolerance).
     """
     try:
         async with VIDEO_ANALYSIS_SEMAPHORE:
+            logger.debug(
+                "Processing video batch_id=%s index=%s message_ids=(%s,%s)",
+                batch_id,
+                index,
+                msg1.message_id,
+                msg2.message_id,
+            )
             # Скачиваем фото параллельно
             # Берем photo[-1] (наилучшее качество)
             photos = [msg1.photo[-1], msg2.photo[-1]]  # type: ignore
@@ -297,7 +363,10 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
                 return VideoProcessingResult(
                     index=index,
                     success=False,
-                    error_message="⚠️ AI не смог распознать метрики."
+                    error_message=(
+                        "⚠️ AI не смог распознать метрики. "
+                        "Проверь, что на скриншотах четко видны цифры, и отправь пару повторно."
+                    ),
                 )
 
             # Проверка на несоответствие контента (разные видео в скриншотах)
@@ -306,7 +375,10 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
                 return VideoProcessingResult(
                     index=index,
                     success=False,
-                    error_message=f"⛔️ Скриншоты не совпадают!\nAI считает, что это разные видео: {reason}"
+                    error_message=(
+                        "⛔️ Скриншоты не совпадают: похоже, это разные видео. "
+                        f"Причина: {reason}"
+                    ),
                 )
 
             # Успешный анализ
@@ -336,11 +408,11 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
             )
 
     except Exception as e:
-        logger.exception(f"Error processing video {index}: {e}")
+        logger.exception("Error processing video batch_id=%s index=%s: %s", batch_id, index, e)
         return VideoProcessingResult(
             index=index,
             success=False,
-            error_message=f"⚠️ Ошибка обработки: {str(e)[:50]}"
+            error_message=_format_processing_exception(e),
         )
 
 
@@ -411,6 +483,14 @@ def build_summary_report(results: list[VideoProcessingResult], saved: int, faile
                 error_msg = "Непарный скриншот"
             elif "не смог распознать" in error_msg.lower():
                 error_msg = "AI не распознал"
+            elif "не совпадают" in error_msg.lower():
+                error_msg = "Скриншоты от разных видео"
+            elif "тайм-аут" in error_msg.lower() or "timeout" in error_msg.lower():
+                error_msg = "Тайм-аут обработки"
+            elif "лимит ai-запросов" in error_msg.lower() or "rate limit" in error_msg.lower():
+                error_msg = "Лимит AI (повтори позже)"
+            elif "telegram временно недоступен" in error_msg.lower():
+                error_msg = "Telegram временно недоступен"
             
             line = f"❌ {res.index}. {error_msg}"
             lines.append(line)

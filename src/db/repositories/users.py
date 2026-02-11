@@ -57,9 +57,9 @@ def is_user_authorized(
     Пользователь авторизован если status = 'approved'.
     """
     if client is None:
-        # Если БД недоступна, разрешаем доступ (для разработки)
-        logger.warning("Supabase client not initialized; allowing access")
-        return True
+        # Fail-closed: если БД недоступна, доступ не разрешаем.
+        logger.warning("Supabase client not initialized; denying access")
+        return False
 
     try:
         resp = client.table("users").select("status").eq("id", user_id).execute()
@@ -109,8 +109,8 @@ def get_user_status(
     Возвращает статус пользователя ('pending', 'approved', 'rejected') или None если пользователь не найден.
     """
     if client is None:
-        logger.warning("Supabase client not initialized; skip get_user_status")
-        return "approved"  # Для разработки разрешаем доступ
+        logger.warning("Supabase client not initialized; cannot read user status")
+        return None
 
     try:
         resp = client.table("users").select("status").eq("id", user_id).execute()
