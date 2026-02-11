@@ -40,6 +40,7 @@ sys.modules["src.config"] = mock_config
 
 from src.services.sheets_service import (
     _build_row,
+    _calculate_age_hours,
     _get_credentials,
     _get_client,
     _get_worksheet,
@@ -221,6 +222,34 @@ class TestRowDataMapping:
             # Verify one decimal place
             decimal_part = er_str.split(".")[1].replace("%", "")
             assert len(decimal_part) == 1
+
+    def test_carousel_watch_time_fallback_from_photos_viewed(self):
+        """Should derive watch time % for carousel from photos_viewed/total_photos."""
+        row = _build_row(
+            {
+                "posted_at": "Posted on Feb 6, 2026, 12:53 PM",
+                "content_type": "carousel",
+                "metrics": {
+                    "views": 900,
+                    "likes": 70,
+                    "comments": 4,
+                    "shares": 6,
+                    "saves": 28,
+                    "avg_watch_time_pct": None,
+                    "photos_viewed": 2.5,
+                    "total_photos": 5,
+                },
+            }
+        )
+        assert row[1] == "Feb 6, 2026, 12:53 PM"
+        assert row[15].endswith("%")
+        assert row[15].startswith("50")
+
+    def test_age_hours_parses_posted_on_prefix(self):
+        """Should parse age even when posted_at has 'Posted on' prefix."""
+        age = _calculate_age_hours("Posted on Feb 6, 2026, 12:53 PM")
+        assert age is not None
+        assert age >= 0
 
 
 class TestSyncExportToSheet:

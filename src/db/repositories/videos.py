@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -23,6 +24,16 @@ if TYPE_CHECKING:
     from supabase import Client
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_posted_at_for_parsing(posted_at: Any) -> str | None:
+    if posted_at is None:
+        return None
+    text = str(posted_at).strip()
+    if not text:
+        return None
+    text = re.sub(r"^\s*posted\s+on\s+", "", text, flags=re.IGNORECASE)
+    return text.strip() or None
 
 
 class VideoStatus(Enum):
@@ -217,7 +228,7 @@ def insert_video(
             full_metrics["hook_type"] = result.get("hook_type")
 
         # Calculate video age in hours from posted_at using dateparser
-        posted_at_str = result.get("posted_at")
+        posted_at_str = _normalize_posted_at_for_parsing(result.get("posted_at"))
         age_hours = None
         if posted_at_str:
             try:

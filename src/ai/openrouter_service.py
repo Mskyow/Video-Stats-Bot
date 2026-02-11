@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from threading import Lock
@@ -535,6 +536,17 @@ def _to_float(value: Any) -> float | None:
     return None
 
 
+def _normalize_posted_at(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    # Keep original date/time text, but remove common UI prefix.
+    text = re.sub(r"^\s*posted\s+on\s+", "", text, flags=re.IGNORECASE)
+    return text.strip() or None
+
+
 def _to_bool(value: Any) -> bool | None:
     if isinstance(value, bool):
         return value
@@ -886,15 +898,27 @@ def _normalize_extraction_result(extracted: dict[str, Any]) -> dict[str, Any]:
         }
 
     metrics = _normalize_metrics(extracted.get("metrics"))
+    normalized_content_type = _normalize_content_type(extracted.get("content_type"))
+    if normalized_content_type == "carousel":
+        photos_viewed = _to_float(metrics.get("photos_viewed"))
+        total_photos = _to_float(metrics.get("total_photos"))
+        if photos_viewed is not None and total_photos and total_photos > 0:
+            # For carousel, derive STR from photos viewed when needed.
+            derived_pct = _clamp((photos_viewed / total_photos) * 100.0, 0.0, 100.0)
+            if metrics.get("viewed_pct") is None:
+                metrics["viewed_pct"] = derived_pct
+            if metrics.get("avg_watch_time_pct") is None:
+                metrics["avg_watch_time_pct"] = derived_pct
+
     confidence = extracted.get("confidence")
     if not isinstance(confidence, dict):
         confidence = {}
 
     return {
         "video_title": extracted.get("video_title"),
-        "posted_at": extracted.get("posted_at"),
+        "posted_at": _normalize_posted_at(extracted.get("posted_at")),
         "platform": _normalize_platform(extracted.get("platform")),
-        "content_type": _normalize_content_type(extracted.get("content_type")),
+        "content_type": normalized_content_type,
         "hook_text": extracted.get("hook_text"),
         "hook_type": _normalize_hook_type(extracted.get("hook_type"), extracted.get("hook_text")),
         "video_duration_sec": _to_float(extracted.get("video_duration_sec")),
@@ -933,7 +957,7 @@ def _normalize_final_result(final_result: dict[str, Any], extracted: dict[str, A
         output.get("hook_type") or extracted.get("hook_type"),
         output.get("hook_text") or extracted.get("hook_text"),
     )
-    output["posted_at"] = output.get("posted_at") or extracted.get("posted_at")
+    output["posted_at"] = _normalize_posted_at(output.get("posted_at") or extracted.get("posted_at"))
     output["video_duration_sec"] = _to_float(
         output.get("video_duration_sec") or extracted.get("video_duration_sec")
     )
@@ -953,6 +977,16 @@ def _normalize_final_result(final_result: dict[str, Any], extracted: dict[str, A
     output.setdefault("expert_heuristics", [])
     output.setdefault("analysis", "Automated analysis completed.")
     output.setdefault("verdict", "🟡 ITERATE")
+
+    if output.get("content_type") == "carousel":
+        photos_viewed = _to_float(merged_metrics.get("photos_viewed"))
+        total_photos = _to_float(merged_metrics.get("total_photos"))
+        if photos_viewed is not None and total_photos and total_photos > 0:
+            derived_pct = _clamp((photos_viewed / total_photos) * 100.0, 0.0, 100.0)
+            if merged_metrics.get("viewed_pct") is None:
+                merged_metrics["viewed_pct"] = derived_pct
+            if merged_metrics.get("avg_watch_time_pct") is None:
+                merged_metrics["avg_watch_time_pct"] = derived_pct
 
     # Guardrail: не даём завышать score при полном отсутствии социального отклика.
     views = float(merged_metrics.get("views") or 0)

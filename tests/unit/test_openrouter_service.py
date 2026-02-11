@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 from src.ai.openrouter_service import (
     _build_scoring_system_prompt,
     _extract_json_object,
+    _normalize_extraction_result,
     _normalize_final_result,
     _normalize_metrics,
     _parse_response,
@@ -197,3 +198,34 @@ def test_build_scoring_system_prompt_defaults_to_video_profile() -> None:
     prompt = _build_scoring_system_prompt("unknown")
     assert "Selected content_type benchmark profile: video" in prompt
     assert "hook_3s" in prompt
+
+
+def test_normalize_extraction_result_carousel_derives_watch_time_and_strips_posted_prefix() -> None:
+    extracted = {
+        "platform": "reels",
+        "content_type": "carousel",
+        "video_title": "Carousel",
+        "posted_at": "Posted on Feb 6, 2026, 12:53 PM",
+        "hook_text": "hook",
+        "hook_type": "short",
+        "video_duration_sec": None,
+        "metrics": {
+            "views": 900,
+            "likes": 70,
+            "comments": 4,
+            "shares": 6,
+            "saves": 28,
+            "retention_3s": 62,
+            "completion_rate": None,
+            "avg_watch_time_pct": None,
+            "viewed_pct": None,
+            "photos_viewed": 2.5,
+            "total_photos": 5,
+            "tiktok_churn_point": None,
+        },
+    }
+
+    normalized = _normalize_extraction_result(extracted)
+    assert normalized["posted_at"] == "Feb 6, 2026, 12:53 PM"
+    assert normalized["metrics"]["viewed_pct"] == 50.0
+    assert normalized["metrics"]["avg_watch_time_pct"] == 50.0

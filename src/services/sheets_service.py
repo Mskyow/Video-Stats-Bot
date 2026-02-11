@@ -264,7 +264,9 @@ def _calculate_age_hours(posted_at: str | None) -> float | None:
         return None
 
     try:
-        parsed_date = dateparser.parse(posted_at)
+        # Accept both raw date and UI-prefixed value like "Posted on Feb 6, 2026, 12:53 PM".
+        normalized_posted_at = re.sub(r"^\s*posted\s+on\s+", "", str(posted_at), flags=re.IGNORECASE).strip()
+        parsed_date = dateparser.parse(normalized_posted_at)
         if parsed_date:
             now = datetime.now(timezone.utc)
             if parsed_date.tzinfo is None:
@@ -425,7 +427,16 @@ def _build_row(video_data: dict[str, Any]) -> list[str]:
     processed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     # 2. Posted At - дата публикации
-    posted_at = _safe_get(video_data, "posted_at", "-")
+    raw_posted_at = video_data.get("posted_at")
+    if raw_posted_at is None or str(raw_posted_at).strip() == "":
+        posted_at = "-"
+    else:
+        posted_at = re.sub(
+            r"^\s*posted\s+on\s+",
+            "",
+            str(raw_posted_at),
+            flags=re.IGNORECASE,
+        ).strip() or "-"
 
     # 3. Content Type - тип контента
     content_type = _safe_get(video_data, "content_type", "-")
@@ -477,6 +488,20 @@ def _build_row(video_data: dict[str, Any]) -> list[str]:
 
     # 16. Watch Time - время просмотра
     watch_time = metrics.get("avg_watch_time_pct")
+    if watch_time is None:
+        photos_viewed = metrics.get("photos_viewed")
+        total_photos = metrics.get("total_photos")
+        try:
+            photos_viewed_f = float(photos_viewed) if photos_viewed is not None else None
+            total_photos_f = float(total_photos) if total_photos is not None else None
+            if (
+                photos_viewed_f is not None
+                and total_photos_f is not None
+                and total_photos_f > 0
+            ):
+                watch_time = round((photos_viewed_f / total_photos_f) * 100, 2)
+        except (ValueError, TypeError):
+            watch_time = None
     if watch_time is None:
         watch_time = video_data.get("avg_watch_time_pct") # Fallback
     watch_time_str = _format_percentage(watch_time) # Use percentage formatting for watch time pct
