@@ -390,11 +390,13 @@ class TestGetGlobalStats:
     """Tests for global statistics."""
 
     def test_get_global_stats_success(self, mock_supabase_client):
-        """Should calculate global statistics correctly."""
+        """Should calculate platform global statistics correctly."""
         mock_videos = [
-            {"score": 80, "metrics": {"avg_watch_time_pct": 65, "retention_3s": 75}},
-            {"score": 60, "metrics": {"avg_watch_time_pct": 55, "retention_3s": 65}},
-            {"score": 90, "metrics": {"avg_watch_time_pct": 75, "retention_3s": 80}},
+            {"platform": "tiktok", "score": 8.0, "metrics": {"views": "12.5K"}},
+            {"platform": "TikTok", "score": 6.0, "metrics": {"views": 15000}},
+            {"platform": "instagram reels", "score": 9.0, "metrics": {"view_count": "1.2M"}},
+            {"platform": "instagram", "score": None, "metrics": {"views": "23000"}},
+            {"platform": "youtube", "score": 10.0, "metrics": {"views": 999999}},
         ]
         mock_response = Mock()
         mock_response.data = mock_videos
@@ -402,10 +404,13 @@ class TestGetGlobalStats:
 
         result = get_global_stats(mock_supabase_client)
 
-        assert result["total_count"] == 3
-        assert result["avg_score"] == 76.7  # (80+60+90)/3
-        assert result["high_watch_time_count"] == 2  # >60%: 65, 75
-        assert result["high_retention_count"] == 2  # >70%: 75, 80
+        assert result["total_count"] == 5
+        assert result["platforms"]["TikTok"]["total_videos"] == 2
+        assert result["platforms"]["TikTok"]["avg_score"] == 7.0
+        assert result["platforms"]["TikTok"]["max_views"] == 15000
+        assert result["platforms"]["Instagram"]["total_videos"] == 2
+        assert result["platforms"]["Instagram"]["avg_score"] == 9.0
+        assert result["platforms"]["Instagram"]["max_views"] == 1200000
 
     def test_get_global_stats_empty(self, mock_supabase_client):
         """Should handle empty database."""
@@ -416,7 +421,12 @@ class TestGetGlobalStats:
         result = get_global_stats(mock_supabase_client)
 
         assert result["total_count"] == 0
-        assert result["avg_score"] == 0.0
+        assert result["platforms"]["TikTok"]["total_videos"] == 0
+        assert result["platforms"]["TikTok"]["avg_score"] == 0.0
+        assert result["platforms"]["TikTok"]["max_views"] == 0
+        assert result["platforms"]["Instagram"]["total_videos"] == 0
+        assert result["platforms"]["Instagram"]["avg_score"] == 0.0
+        assert result["platforms"]["Instagram"]["max_views"] == 0
 
     def test_get_global_stats_null_client(self):
         """Should return empty dict when client is None."""

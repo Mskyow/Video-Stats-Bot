@@ -314,69 +314,121 @@ def get_videos_by_date_range(
         return []
 
 
+def _normalize_platform_name(raw_platform: Any) -> str | None:
+    """Нормализует название платформы к одной из целевых для сводки."""
+    if raw_platform is None:
+        return None
+
+    platform_text = str(raw_platform).lower()
+    if "tiktok" in platform_text:
+        return "TikTok"
+    if "instagram" in platform_text or "reels" in platform_text:
+        return "Instagram"
+    return None
+
+
+def _parse_views_value(raw_views: Any) -> int:
+    """
+    Преобразует просмотры к целому числу.
+    Поддерживает:
+    - int / float
+    - строки вида "12 345", "12,345", "12.3K", "1.2M"
+    """
+    if raw_views is None:
+        return 0
+
+    if isinstance(raw_views, bool):
+        return 0
+
+    if isinstance(raw_views, (int, float)):
+        return int(raw_views)
+
+    if not isinstance(raw_views, str):
+        return 0
+
+    normalized = raw_views.strip().upper().replace(" ", "").replace(",", "")
+    if not normalized:
+        return 0
+
+    multiplier = 1
+    if normalized.endswith("K"):
+        multiplier = 1000
+        normalized = normalized[:-1]
+    elif normalized.endswith("M"):
+        multiplier = 1000000
+        normalized = normalized[:-1]
+    elif normalized.endswith("B"):
+        multiplier = 1000000000
+        normalized = normalized[:-1]
+
+    try:
+        return int(float(normalized) * multiplier)
+    except (ValueError, TypeError):
+        return 0
+
+
 def get_global_stats(client: Client | None) -> dict[str, Any]:
     """
-    Возвращает глобальную статистику:
-    - total_count (int)
-    - avg_score (float)
-    - high_watch_time_count (count where avg_watch_time > 60%)
-    - high_retention_count (count where retention_3s > 70%)
+    Возвращает глобальную статистику по TikTok и Instagram:
+    - total_count (int): общее число видео в базе
+    - platforms (dict): агрегаты по платформам
+      - total_videos (int)
+      - avg_score (float)
+      - max_views (int)
     """
     if client is None:
         return {}
     try:
-        # We need to fetch all videos or use aggregate queries if Supabase/PostgREST supports them well.
-        # Client-side aggregation might be heavy if many videos, but for now it's likely fine.
-        # Or we can use RPC calls if defined. Assuming client-side for simplicity as per requirements.
-        
         resp = client.table("videos").select("*").execute()
         videos = resp.data or []
-        
+
         total_count = len(videos)
-        if total_count == 0:
-            return {
-                "total_count": 0,
-                "avg_score": 0.0,
-                "high_watch_time_count": 0,
-                "high_retention_count": 0,
+
+        platform_aggregates: dict[str, dict[str, Any]] = {
+            "TikTok": {"total_videos": 0, "score_sum": 0.0, "score_count": 0, "max_views": 0},
+            "Instagram": {"total_videos": 0, "score_sum": 0.0, "score_count": 0, "max_views": 0},
+        }
+
+        for video in videos:
+            platform_name = _normalize_platform_name(video.get("platform"))
+            if not platform_name:
+                continue
+
+            aggregate = platform_aggregates[platform_name]
+            aggregate["total_videos"] += 1
+
+            score = video.get("score")
+            if score is not None:
+                try:
+                    score_value = float(score)
+                    aggregate["score_sum"] += score_value
+                    aggregate["score_count"] += 1
+                except (ValueError, TypeError):
+                    pass
+
+            metrics = video.get("metrics") or {}
+            raw_views = metrics.get("views") or metrics.get("view_count")
+            views_value = _parse_views_value(raw_views)
+            if views_value > aggregate["max_views"]:
+                aggregate["max_views"] = views_value
+
+        formatted_platforms: dict[str, dict[str, Any]] = {}
+        for platform_name, aggregate in platform_aggregates.items():
+            score_count = aggregate["score_count"]
+            avg_score = (
+                round(aggregate["score_sum"] / score_count, 1)
+                if score_count > 0
+                else 0.0
+            )
+            formatted_platforms[platform_name] = {
+                "total_videos": aggregate["total_videos"],
+                "avg_score": avg_score,
+                "max_views": aggregate["max_views"],
             }
-
-        total_score = sum(float(v.get("score") or 0) for v in videos)
-        avg_score = total_score / total_count
-
-        high_watch_time_count = 0
-        high_retention_count = 0
-
-        for v in videos:
-            metrics = v.get("metrics") or {}
-            
-            # Check avg_watch_time > 60%
-            # Ensure we handle percentage strings or numbers (e.g. 0.65 or 65)
-            # Based on prompt, avg_watch_time_pct is likely a number (e.g. 65.5).
-            # We should check both cases to be safe.
-            awt = metrics.get("avg_watch_time_pct")
-            if awt is not None:
-                try:
-                    if float(awt) > 60: # Assuming 0-100 scale based on prompt
-                         high_watch_time_count += 1
-                except (ValueError, TypeError):
-                    pass
-            
-            # Check retention_3s > 70%
-            # Also check metrics for retention_3s
-            r3s = metrics.get("retention_3s")
-            if r3s is not None:
-                try:
-                    if float(r3s) > 70:
-                        high_retention_count += 1
-                except (ValueError, TypeError):
-                    pass
 
         return {
             "total_count": total_count,
-            "avg_score": round(avg_score, 1),
-            "high_watch_time_count": high_watch_time_count,
-            "high_retention_count": high_retention_count,
+            "platforms": formatted_platforms,
         }
     except Exception as e:
         logger.exception("get_global_stats failed: %s", e)

@@ -198,9 +198,9 @@ async def cmd_all_stats(message: Message, **kwargs) -> None:
             return
 
         total = stats.get("total_count", 0)
-        avg = stats.get("avg_score", 0.0)
-        high_watch = stats.get("high_watch_time_count", 0)
-        high_retention = stats.get("high_retention_count", 0)
+        platforms = stats.get("platforms") or {}
+        tiktok_stats = platforms.get("TikTok") or {}
+        instagram_stats = platforms.get("Instagram") or {}
 
         if total == 0:
             await message.answer(
@@ -209,13 +209,35 @@ async def cmd_all_stats(message: Message, **kwargs) -> None:
             )
             return
 
+        def format_int(value: Any) -> str:
+            try:
+                return f"{int(value):,}".replace(",", " ")
+            except (ValueError, TypeError):
+                return "0"
+
+        tiktok_total = tiktok_stats.get("total_videos", 0)
+        instagram_total = instagram_stats.get("total_videos", 0)
+        tiktok_avg = float(tiktok_stats.get("avg_score", 0) or 0)
+        instagram_avg = float(instagram_stats.get("avg_score", 0) or 0)
+        tiktok_max_views = format_int(tiktok_stats.get("max_views", 0))
+        instagram_max_views = format_int(instagram_stats.get("max_views", 0))
+
         text = (
-            "📈 <b>Общая статистика</b>\n\n"
-            f"Всего видео: <b>{total}</b>\n"
-            f"Средний балл: <b>{avg:.1f}</b>\n"
-            f"Высокий Retention: <b>{high_retention}</b>"
+            "📈 <b>Общая статистика по всем загруженным видео</b>\n"
+            "<i>Эта сводка помогает быстро сравнить TikTok и Instagram: "
+            "где больше контента, выше средний балл и сильнее охват.</i>\n\n"
+            "1️⃣ <b>Всего видео по платформам</b>\n"
+            f"• TikTok: <b>{format_int(tiktok_total)}</b>\n"
+            f"• Instagram: <b>{format_int(instagram_total)}</b>\n\n"
+            "2️⃣ <b>Средний балл на видео по платформам</b>\n"
+            f"• TikTok: <b>{tiktok_avg:.1f}/10</b>\n"
+            f"• Instagram: <b>{instagram_avg:.1f}/10</b>\n\n"
+            "3️⃣ <b>Самые высокие просмотры на одном видео по платформам</b>\n"
+            f"• TikTok: <b>{tiktok_max_views}</b>\n"
+            f"• Instagram: <b>{instagram_max_views}</b>\n\n"
+            f"Всего видео в базе: <b>{format_int(total)}</b>"
         )
-        await message.answer(text)
+        await message.answer(text, parse_mode="HTML")
         
     except Exception as e:
         logger.exception("Error fetching global stats: %s", e)
