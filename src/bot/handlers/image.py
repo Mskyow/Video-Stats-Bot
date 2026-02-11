@@ -182,8 +182,7 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
                 if not is_duplicate and GOOGLE_SHEET_ID:
                     if res.raw_response:
                         res.ai_result["raw_response"] = res.raw_response
-                    # Отправляем в очередь и передаем chat_id для уведомления
-                    queue_export(res.ai_result, message.chat.id)
+                    queue_export(res.ai_result)
                 
             except Exception as e:
                 logger.error(f"Failed to process result for video {res.index}: {e}")
@@ -204,10 +203,6 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     # Итого: total = saved + duplicates + failed
     
     report_text = build_summary_report(results, saved_count, failed_count, duplicate_count)
-
-    
-    if GOOGLE_SHEET_ID:
-        report_text += f"\n\n📤 <b>Успешно отправлено в Google таблицу: {saved_count}</b>"
 
     # Кнопки
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
@@ -396,4 +391,9 @@ def build_summary_report(results: list[VideoProcessingResult], saved: int, faile
             line = f"❌ {res.index}. {error_msg}"
             lines.append(line)
             
-    return header + "\n" + "\n".join(lines)
+    report = header + "\n" + "\n".join(lines)
+    
+    if GOOGLE_SHEET_ID:
+        report += f"\n\n📤 Успешно отправлено в Google таблицу: {saved}/{total_videos}"
+        
+    return report
