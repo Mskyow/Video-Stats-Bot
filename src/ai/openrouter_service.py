@@ -21,7 +21,7 @@ from typing import Any, Callable
 import requests
 
 from src import config
-from src.ai.benchmarks import BENCHMARKS_CONTEXT
+from src.ai.benchmarks import BENCHMARKS_BY_CONTENT_TYPE, BENCHMARKS_CONTEXT
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "google/gemini-3-flash-preview"
 
 # Превращаем dict с бенчмарками в JSON-строку для контекста модели
-benchmarks_json = json.dumps(BENCHMARKS_CONTEXT, indent=2, ensure_ascii=False)
+legacy_benchmarks_json = json.dumps(BENCHMARKS_CONTEXT, indent=2, ensure_ascii=False)
 
 # JSON schema example (plain string, not f-string to avoid escaping issues)
 JSON_SCHEMA_EXAMPLE = """{
@@ -72,8 +72,8 @@ JSON_SCHEMA_EXAMPLE = """{
   "recommendations": ["Actionable advice 1", "Actionable advice 2"]
 }"""
 
-# Build SYSTEM_PROMPT via string concatenation to avoid f-string escaping issues
-SYSTEM_PROMPT = (
+# Build legacy SYSTEM_PROMPT via string concatenation to avoid f-string escaping issues
+LEGACY_SYSTEM_PROMPT = (
     "You are **Creator Copilot**, a Senior Growth Analyst.\n"
     "Your goal: Analyze short-form video metrics (TikTok/Reels) using strict data benchmarks.\n"
     "\n"
@@ -85,7 +85,7 @@ SYSTEM_PROMPT = (
     '## 2. REFERENCE DATA (THE "BIBLE")\n'
     "Use the following JSON benchmarks for all scoring. Do NOT hallucinate thresholds.\n"
     "<BENCHMARKS>\n"
-    + benchmarks_json +
+    + legacy_benchmarks_json +
     "\n</BENCHMARKS>\n"
     "\n"
     "## 3. ANALYSIS LOGIC\n"
@@ -146,7 +146,7 @@ SYSTEM_PROMPT = (
     + JSON_SCHEMA_EXAMPLE
 )
 
-USER_PROMPT = """Analyze the provided images of video metrics/analytics.
+LEGACY_USER_PROMPT = """Analyze the provided images of video metrics/analytics.
 
 You will receive TWO images:
 1. Overview Metrics: engagement numbers, views, posted date/time, etc.
@@ -214,6 +214,11 @@ Rules:
 - For `hook_type`, use only: short|medium|long (based on hook_text word count).
 - For video retention graph, estimate `retention_3s` from the curve at ~3 seconds when exact value is not printed.
 - If retention graph is visible, avoid leaving `retention_3s` null.
+- For carousel:
+  - `retention_3s` should store first-slide retention (percent who swiped from slide 1 to slide 2).
+  - `viewed_pct` should store swipe-through rate (STR). If STR is not shown directly, compute from `photos_viewed / total_photos * 100`.
+  - `completion_rate` should store platform completion metric if explicitly shown (especially TikTok carousel analytics).
+  - `mixed_media`: set true if both photos and videos are visible in the carousel, false if clearly only one type, else null.
 - For Reels/TikTok watch time:
   - if average watch time in seconds and video duration are visible, compute `avg_watch_time_pct = avg_watch_time_sec / duration_sec * 100`.
   - values above 100 are valid when users rewatch (looping). Do not cap to 100.
@@ -224,18 +229,23 @@ Rules:
   {"error":"content_mismatch","reason":"..."}
 """
 
-SCORING_SYSTEM_PROMPT = (
+SCORING_SYSTEM_PROMPT_BASE = (
     "You are a Senior Growth Analyst.\n"
     "You receive ONLY extracted facts JSON (already OCR'd). Do not invent missing data.\n"
     "Compute score deterministically from BENCHMARKS and provide verdict + recommendations.\n"
+    "Use ONLY the benchmark profile selected for the detected content_type.\n"
+    "For carousel, interpret retention_3s as first-slide retention (slide 1 -> 2).\n"
+    "For carousel STR, prioritize viewed_pct; fallback to photos_viewed/total_photos.\n"
+    "Apply penalties/bonuses and automated decision tree in BENCHMARKS exactly.\n"
     "Keep final score in range 0..10.\n"
-    "<BENCHMARKS>\n"
-    + benchmarks_json
-    + "\n</BENCHMARKS>\n"
+)
+
+SCORING_SYSTEM_PROMPT_SUFFIX = (
     "\n"
     "Few-shot style examples:\n"
     "Example A (strong): retention_3s=74, share_rate=1.8 -> verdict likely SCALE, high score.\n"
     "Example B (weak): retention_3s=44, low completion -> verdict likely KILL/FIX, low score.\n"
+    "Example C (carousel): first-slide-retention=68, STR=62, save_rate=3.4 -> likely SCALE with bonuses.\n"
 )
 
 SCORING_USER_PROMPT_TEMPLATE = (
@@ -245,8 +255,26 @@ SCORING_USER_PROMPT_TEMPLATE = (
     "{extracted_json}"
 )
 
+
+def _build_scoring_system_prompt(content_type: Any) -> str:
+    normalized_content_type = _normalize_content_type(content_type)
+    selected_benchmarks = BENCHMARKS_BY_CONTENT_TYPE.get(
+        normalized_content_type,
+        BENCHMARKS_CONTEXT,
+    )
+    selected_benchmarks_json = json.dumps(selected_benchmarks, indent=2, ensure_ascii=False)
+    return (
+        SCORING_SYSTEM_PROMPT_BASE
+        + f"Selected content_type benchmark profile: {normalized_content_type}.\n"
+        + "<BENCHMARKS>\n"
+        + selected_benchmarks_json
+        + "\n</BENCHMARKS>\n"
+        + SCORING_SYSTEM_PROMPT_SUFFIX
+    )
+
+
 # Backward-compat aliases used in tests/imports
-SYSTEM_PROMPT = EXTRACTION_SYSTEM_PROMPT
+SYSTEM_PROMPT = LEGACY_SYSTEM_PROMPT
 USER_PROMPT = EXTRACTION_USER_PROMPT
 
 EXTRACTION_SCHEMA: dict[str, Any] = {
@@ -276,6 +304,8 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
                 "photos_viewed": {"type": ["number", "null"]},
                 "total_photos": {"type": ["number", "null"]},
                 "tiktok_churn_point": {"type": ["string", "null"]},
+                "mixed_media": {"type": ["boolean", "null"]},
+                "account_avg_views": {"type": ["number", "null"]},
             },
             "required": [
                 "views",
@@ -502,6 +532,20 @@ def _to_float(value: Any) -> float | None:
             return float(normalized)
         except ValueError:
             return None
+    return None
+
+
+def _to_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1"}:
+            return True
+        if normalized in {"false", "no", "0"}:
+            return False
     return None
 
 
@@ -778,6 +822,8 @@ def _normalize_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
 
     normalized["photos_viewed"] = _to_float(source.get("photos_viewed"))
     normalized["total_photos"] = _to_float(source.get("total_photos"))
+    normalized["mixed_media"] = _to_bool(source.get("mixed_media"))
+    normalized["account_avg_views"] = _to_float(source.get("account_avg_views"))
     churn_point = source.get("tiktok_churn_point")
     normalized["tiktok_churn_point"] = str(churn_point) if churn_point is not None else None
 
@@ -792,9 +838,16 @@ def _calculate_rates(metrics: dict[str, Any]) -> dict[str, float]:
     saves = float(metrics.get("saves") or 0)
 
     if views <= 0:
-        return {"share_rate": 0.0, "save_rate": 0.0, "aggregated_er": 0.0}
+        return {
+            "like_rate": 0.0,
+            "share_rate": 0.0,
+            "save_rate": 0.0,
+            "comment_rate": 0.0,
+            "aggregated_er": 0.0,
+        }
 
     return {
+        "like_rate": round((likes / views) * 100, 3),
         "share_rate": round((shares / views) * 100, 3),
         "save_rate": round((saves / views) * 100, 3),
         "comment_rate": round((comments / views) * 100, 3),
@@ -806,6 +859,7 @@ def _normalize_calculated_rates(rates: dict[str, Any] | None, metrics: dict[str,
     base = _calculate_rates(metrics)
     source = rates or {}
     normalized = {
+        "like_rate": _to_float(source.get("like_rate")),
         "share_rate": _to_float(source.get("share_rate")),
         "save_rate": _to_float(source.get("save_rate")),
         "comment_rate": _to_float(source.get("comment_rate")),
@@ -1105,8 +1159,9 @@ def analyze_screenshot(
         return extracted, extraction_raw_text
 
     scoring_input = json.dumps(extracted, ensure_ascii=False)
+    scoring_system_prompt = _build_scoring_system_prompt(extracted.get("content_type"))
     scoring_messages = [
-        {"role": "system", "content": SCORING_SYSTEM_PROMPT},
+        {"role": "system", "content": scoring_system_prompt},
         {
             "role": "user",
             "content": SCORING_USER_PROMPT_TEMPLATE.format(extracted_json=scoring_input),

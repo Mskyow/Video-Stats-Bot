@@ -5,6 +5,7 @@ import json
 from unittest.mock import Mock, patch
 
 from src.ai.openrouter_service import (
+    _build_scoring_system_prompt,
     _extract_json_object,
     _normalize_final_result,
     _normalize_metrics,
@@ -183,3 +184,16 @@ def test_score_guardrail_caps_zero_social_actions() -> None:
     normalized = _normalize_final_result(final_result, extracted, "test-model")
     assert normalized["score"] <= 4.8
     assert "ITERATE" in normalized["verdict"]
+
+
+def test_build_scoring_system_prompt_uses_carousel_benchmarks() -> None:
+    prompt = _build_scoring_system_prompt("carousel")
+    assert "Selected content_type benchmark profile: carousel" in prompt
+    assert "first_slide_hook" in prompt
+    assert "swipe_through_rate" in prompt
+
+
+def test_build_scoring_system_prompt_defaults_to_video_profile() -> None:
+    prompt = _build_scoring_system_prompt("unknown")
+    assert "Selected content_type benchmark profile: video" in prompt
+    assert "hook_3s" in prompt
