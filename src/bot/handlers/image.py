@@ -15,13 +15,18 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.fsm.context import FSMContext
 
 from src.ai.openrouter_service import analyze_screenshot
-from src.config import GOOGLE_SHEET_ID
+from src.config import (
+    GOOGLE_SHEET_ID,
+    MAX_CONCURRENT_ANALYSIS,
+    TG_FILE_DOWNLOAD_TIMEOUT_SEC,
+)
 from src.db.repositories.videos import insert_video
 from src.db.supabase_client import get_supabase
 from src.services.sheets_service import queue_export
 
 router = Router(name="image")
 logger = logging.getLogger(__name__)
+VIDEO_ANALYSIS_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_ANALYSIS)
 
 
 @dataclass
@@ -74,6 +79,7 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     processing_msg = await message.answer(
         f"⏳ <b>Начинаю обработку...</b>\n"
         f"Видео в очереди: {len(pairs)}\n"
+        f"Одновременно обрабатываю: до {MAX_CONCURRENT_ANALYSIS}\n"
         f"⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️ 0%"
     )
 
@@ -236,80 +242,98 @@ async def process_single_video(index: int, msg1: Message, msg2: Message, bot: Bo
     Не падает при ошибках (Fault Tolerance).
     """
     try:
-        # Скачиваем фото параллельно
-        # Берем photo[-1] (наилучшее качество)
-        photos = [msg1.photo[-1], msg2.photo[-1]] # type: ignore
-        
-        # Функция для скачивания с ретраями/обработкой
-        async def download(file_id: str) -> bytes:
-            try:
-                file_info = await bot.get_file(file_id)
-                if not file_info.file_path:
-                    raise ValueError("No file path")
-                
-                downloaded = await bot.download_file(file_info.file_path)
-                if downloaded is None:
-                    raise ValueError("Empty response")
-                    
-                return downloaded.read() if hasattr(downloaded, "read") else bytes(downloaded)
-            except TelegramNetworkError:
-                # Простейший retry logic можно добавить здесь, но для скорости пока без него
-                raise
-        
-        # Параллельная загрузка двух файлов
-        images_bytes = await asyncio.gather(
-            download(photos[0].file_id),
-            download(photos[1].file_id)
-        )
-        
-        # AI Анализ (в треде, т.к. requests синхронный)
-        result_json, raw_response = await asyncio.to_thread(
-            analyze_screenshot,
-            list(images_bytes),
-            mime_type="image/jpeg",
-        )
-        
-        if not result_json:
-            return VideoProcessingResult(
-                index=index,
-                success=False,
-                error_message="⚠️ AI не смог распознать метрики."
+        async with VIDEO_ANALYSIS_SEMAPHORE:
+            # Скачиваем фото параллельно
+            # Берем photo[-1] (наилучшее качество)
+            photos = [msg1.photo[-1], msg2.photo[-1]]  # type: ignore
+
+            async def download(file_id: str) -> bytes:
+                """Скачивает один файл из Telegram с жесткими тайм-аутами."""
+                try:
+                    file_info = await asyncio.wait_for(
+                        bot.get_file(file_id), timeout=TG_FILE_DOWNLOAD_TIMEOUT_SEC
+                    )
+                    if not file_info.file_path:
+                        raise ValueError("No file path")
+
+                    downloaded = await asyncio.wait_for(
+                        bot.download_file(file_info.file_path),
+                        timeout=TG_FILE_DOWNLOAD_TIMEOUT_SEC,
+                    )
+                    if downloaded is None:
+                        raise ValueError("Empty response")
+
+                    if hasattr(downloaded, "read"):
+                        raw_data = await asyncio.wait_for(
+                            asyncio.to_thread(downloaded.read),
+                            timeout=TG_FILE_DOWNLOAD_TIMEOUT_SEC,
+                        )
+                    else:
+                        raw_data = downloaded
+
+                    return raw_data if isinstance(raw_data, bytes) else bytes(raw_data)
+                except asyncio.TimeoutError as exc:
+                    raise TimeoutError(
+                        f"тайм-аут скачивания файла Telegram ({TG_FILE_DOWNLOAD_TIMEOUT_SEC:.0f}с)"
+                    ) from exc
+                except TelegramNetworkError:
+                    # Сетевой сбой Telegram
+                    raise
+
+            # Параллельная загрузка двух файлов
+            images_bytes = await asyncio.gather(
+                download(photos[0].file_id),
+                download(photos[1].file_id)
             )
 
-        # Проверка на несоответствие контента (разные видео в скриншотах)
-        if result_json.get("error") == "content_mismatch":
-            reason = result_json.get("reason", "Неизвестная причина")
-            return VideoProcessingResult(
-                index=index,
-                success=False,
-                error_message=f"⛔️ Скриншоты не совпадают!\nAI считает, что это разные видео: {reason}"
+            # AI Анализ (в треде, т.к. requests синхронный)
+            result_json, raw_response = await asyncio.to_thread(
+                analyze_screenshot,
+                list(images_bytes),
+                mime_type="image/jpeg",
             )
 
-        # Успешный анализ
-        title = result_json.get("video_title") or f"Video #{index}"
-        score = float(result_json.get("score", 0))
-        
-        # Определение рейтинга для краткости (Kill/Fix/Iterate/Scale)
-        verdict = result_json.get("verdict", "")
-        rating_label = "N/A"
-        if "KILL" in verdict:
-            rating_label = "Kill"
-        elif "FIX" in verdict:
-            rating_label = "Fix"
-        elif "ITERATE" in verdict:
-            rating_label = "Iterate"
-        elif "SCALE" in verdict:
-            rating_label = "Scale"
-            
-        return VideoProcessingResult(
-            index=index,
-            success=True,
-            video_title=title,
-            score=score,
-            rating_label=rating_label,
-            ai_result=result_json,
-            raw_response=raw_response
-        )
+            if not result_json:
+                return VideoProcessingResult(
+                    index=index,
+                    success=False,
+                    error_message="⚠️ AI не смог распознать метрики."
+                )
+
+            # Проверка на несоответствие контента (разные видео в скриншотах)
+            if result_json.get("error") == "content_mismatch":
+                reason = result_json.get("reason", "Неизвестная причина")
+                return VideoProcessingResult(
+                    index=index,
+                    success=False,
+                    error_message=f"⛔️ Скриншоты не совпадают!\nAI считает, что это разные видео: {reason}"
+                )
+
+            # Успешный анализ
+            title = result_json.get("video_title") or f"Video #{index}"
+            score = float(result_json.get("score", 0))
+
+            # Определение рейтинга для краткости (Kill/Fix/Iterate/Scale)
+            verdict = result_json.get("verdict", "")
+            rating_label = "N/A"
+            if "KILL" in verdict:
+                rating_label = "Kill"
+            elif "FIX" in verdict:
+                rating_label = "Fix"
+            elif "ITERATE" in verdict:
+                rating_label = "Iterate"
+            elif "SCALE" in verdict:
+                rating_label = "Scale"
+
+            return VideoProcessingResult(
+                index=index,
+                success=True,
+                video_title=title,
+                score=score,
+                rating_label=rating_label,
+                ai_result=result_json,
+                raw_response=raw_response
+            )
 
     except Exception as e:
         logger.exception(f"Error processing video {index}: {e}")

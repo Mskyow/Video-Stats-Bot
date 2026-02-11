@@ -30,6 +30,26 @@ def _get_optional(key: str, default: str | None = None) -> str | None:
     return value.strip() if value else None
 
 
+def _get_int_optional(key: str, default: int) -> int:
+    raw = _get_optional(key)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Переменная {key} должна быть целым числом, получено: {raw}") from exc
+
+
+def _get_float_optional(key: str, default: float) -> float:
+    raw = _get_optional(key)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError(f"Переменная {key} должна быть числом, получено: {raw}") from exc
+
+
 # Обязательные
 TG_TOKEN: str = _get("TG_TOKEN")
 OPENROUTER_API_KEY: str = _get("OPENROUTER_API_KEY")
@@ -55,7 +75,11 @@ GOOGLE_SHEET_WORKSHEET_NAME: str = _get_optional("GOOGLE_SHEET_WORKSHEET_NAME") 
 REPORT_CHAT_ID: int | None = int(v) if (v := _get_optional("REPORT_CHAT_ID")) else None
 
 # Лимит одновременных запросов к AI
-MAX_CONCURRENT_ANALYSIS: int = 4
+MAX_CONCURRENT_ANALYSIS: int = max(1, _get_int_optional("MAX_CONCURRENT_ANALYSIS", 4))
+# Жесткий тайм-аут скачивания файла из Telegram (сек)
+TG_FILE_DOWNLOAD_TIMEOUT_SEC: float = max(
+    1.0, _get_float_optional("TG_FILE_DOWNLOAD_TIMEOUT_SEC", 20.0)
+)
 # Задержка между записями в таблицу (секунды)
 SHEETS_WRITE_DELAY: float = 1.2
 

@@ -93,7 +93,7 @@ git push -u origin main
 - `SUPABASE_URL` — URL проекта Supabase.
 - `SUPABASE_KEY` — service role key (для полного доступа к БД из бота).
 
-Опционально: `OPENROUTER_MODEL` (по умолчанию `google/gemini-3-flash-preview`), `LOG_LEVEL`, `WEBHOOK_URL` (если на Railway будет webhook).
+Опционально: `OPENROUTER_MODEL` (по умолчанию `google/gemini-3-flash-preview`), `LOG_LEVEL`, `WEBHOOK_URL` (если на Railway будет webhook), `MAX_CONCURRENT_ANALYSIS` (лимит параллельной обработки видео), `TG_FILE_DOWNLOAD_TIMEOUT_SEC` (жёсткий тайм-аут скачивания файла из Telegram).
 
 ## База данных (Supabase)
 
