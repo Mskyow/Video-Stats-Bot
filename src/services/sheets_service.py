@@ -3,7 +3,7 @@
 
 Функционал:
 - Авторизация через Service Account.
-- Экспорт данных видео в 16-колоночный формат отчета.
+- Экспорт данных видео в расширенный формат отчета (все engagement метрики).
 - Умный дорасчет отсутствующих полей (age_hours, aggregated_er).
 - Безопасное форматирование процентов и пустых значений.
 - Отказоустойчивость с retry-логикой и exponential backoff.
@@ -48,7 +48,7 @@ def get_sheets_queue() -> asyncio.Queue[dict[str, Any]]:
 MAX_RETRIES = 3
 RETRY_DELAY_BASE = 2  # секунды
 
-# Определение 17 колонок отчета в строгом порядке
+# Определение колонок отчета в строгом порядке
 REPORT_COLUMNS = [
     "Processed At",   # 1
     "Posted At",      # 2
@@ -63,11 +63,11 @@ REPORT_COLUMNS = [
     "Likes",          # 11
     "Comments",       # 12
     "Shares",         # 13
-    "Retention",      # 14
-    "Watch Time",     # 15
-    "ER",             # 16
-    "AI Analysis",    # 17
-    "Raw AI Response", # 18
+    "Saves",          # 14
+    "Retention",      # 15
+    "Watch Time",     # 16
+    "ER",             # 17
+    "AI Analysis",    # 18
 ]
 
 
@@ -358,7 +358,7 @@ def _safe_get(data: dict[str, Any], key: str, default: str = "-") -> str:
 
 def _build_row(video_data: dict[str, Any]) -> list[str]:
     """
-    Формирует строку данных для экспорта в 17-колоночный формат.
+    Формирует строку данных для экспорта в REPORT_COLUMNS формат.
 
     Args:
         video_data: Словарь с данными видео.
@@ -400,31 +400,33 @@ def _build_row(video_data: dict[str, Any]) -> list[str]:
     # 9. Verdict - вердикт
     verdict = _safe_get(video_data, "verdict", "-")
 
-    # 10-13. Metrics: Views, Likes, Comments, Shares
+    # 10-14. Metrics: Views, Likes, Comments, Shares, Saves
     metrics = video_data.get("metrics") or {}
     views = metrics.get("views")
     likes = metrics.get("likes")
     comments = metrics.get("comments")
     shares = metrics.get("shares")
+    saves = metrics.get("saves")
 
     views_str = _format_number(views)
     likes_str = _format_number(likes)
     comments_str = _format_number(comments)
     shares_str = _format_number(shares)
+    saves_str = _format_number(saves)
 
-    # 14. Retention - удержание аудитории
+    # 15. Retention - удержание аудитории
     retention = metrics.get("retention_3s")
     if retention is None:
         retention = video_data.get("retention_3s") # Fallback to top-level if legacy structure
     retention_str = _format_percentage(retention)
 
-    # 15. Watch Time - время просмотра
+    # 16. Watch Time - время просмотра
     watch_time = metrics.get("avg_watch_time_pct")
     if watch_time is None:
         watch_time = video_data.get("avg_watch_time_pct") # Fallback
     watch_time_str = _format_percentage(watch_time) # Use percentage formatting for watch time pct
 
-    # 16. ER - Engagement Rate (с дорасчетом если нужно)
+    # 17. ER - Engagement Rate (с дорасчетом если нужно)
     aggregated_er = video_data.get("aggregated_er")
     if aggregated_er is None and views:
         # Дорасчет ER по формуле: (actions / views) * 100
@@ -432,11 +434,12 @@ def _build_row(video_data: dict[str, Any]) -> list[str]:
             "likes": likes or 0,
             "comments": comments or 0,
             "shares": shares or 0,
+            "saves": saves or 0,
         }
         aggregated_er = _calculate_er(actions, views)
     er_str = _format_percentage(aggregated_er)
 
-    # 17. AI Analysis
+    # 18. AI Analysis
     analysis = _safe_get(video_data, "analysis", "-")
 
     return [
@@ -453,10 +456,11 @@ def _build_row(video_data: dict[str, Any]) -> list[str]:
         likes_str,      # 11
         comments_str,   # 12
         shares_str,     # 13
-        retention_str,  # 14
-        watch_time_str, # 15
-        er_str,         # 16
-        analysis,       # 17
+        saves_str,      # 14
+        retention_str,  # 15
+        watch_time_str, # 16
+        er_str,         # 17
+        analysis,       # 18
     ]
 
 
@@ -503,7 +507,7 @@ def _append_row_with_retry(
 
 def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
     """
-    Экспортирует данные видео в Google Sheet в 17-колоночном формате.
+    Экспортирует данные видео в Google Sheet в формате REPORT_COLUMNS.
 
     Колонки (в порядке):
         1. Processed At - дата/время обработки
@@ -519,10 +523,11 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
         11. Likes - лайки
         12. Comments - комментарии
         13. Shares - репосты
-        14. Retention - удержание
-        15. Watch Time - время просмотра
-        16. ER - Engagement Rate (дорасчет если нужно)
-        17. AI Analysis - детальный анализ от AI
+        14. Saves - сохранения
+        15. Retention - удержание
+        16. Watch Time - время просмотра
+        17. ER - Engagement Rate (дорасчет если нужно)
+        18. AI Analysis - детальный анализ от AI
 
     Args:
         video_data: Словарь с данными видео.

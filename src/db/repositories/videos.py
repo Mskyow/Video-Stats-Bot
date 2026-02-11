@@ -171,7 +171,7 @@ def insert_video(
 
     # Извлекаем данные для проверки дубликатов
     metrics = result.get("metrics") or {}
-    title = result.get("title")
+    title = result.get("title") or result.get("video_title") or result.get("hook_text")
     posted_at = result.get("posted_at")
     new_views = metrics.get("views")
 
@@ -200,6 +200,11 @@ def insert_video(
     try:
         # Извлекаем данные из результата AI
         metrics = result.get("metrics") or {}
+        # Гарантируем, что engagement-метрики всегда присутствуют
+        for key in ("views", "likes", "comments", "shares", "saves"):
+            value = metrics.get(key)
+            if value is None:
+                metrics[key] = 0
         calculated_rates = result.get("calculated_rates") or {}
         tier_1 = result.get("tier_1_analysis") or {}
         tier_2 = result.get("tier_2_analysis") or {}
@@ -243,7 +248,7 @@ def insert_video(
         payload: dict[str, Any] = {
             "user_id": user_id,
             "platform": result.get("platform"),
-            "title": result.get("title"),
+            "title": title,
             "metrics": full_metrics,
             "score": float(result.get("score") or 0),
             "analysis": result.get("analysis"),

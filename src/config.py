@@ -50,6 +50,18 @@ def _get_float_optional(key: str, default: float) -> float:
         raise ValueError(f"Переменная {key} должна быть числом, получено: {raw}") from exc
 
 
+def _get_bool_optional(key: str, default: bool) -> bool:
+    raw = _get_optional(key)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Переменная {key} должна быть bool (true/false), получено: {raw}")
+
+
 # Обязательные
 TG_TOKEN: str = _get("TG_TOKEN")
 OPENROUTER_API_KEY: str = _get("OPENROUTER_API_KEY")
@@ -76,6 +88,16 @@ REPORT_CHAT_ID: int | None = int(v) if (v := _get_optional("REPORT_CHAT_ID")) el
 
 # Лимит одновременных запросов к AI
 MAX_CONCURRENT_ANALYSIS: int = max(1, _get_int_optional("MAX_CONCURRENT_ANALYSIS", 4))
+# Тайм-аут одного запроса к OpenRouter (сек)
+OPENROUTER_TIMEOUT_SEC: float = max(10.0, _get_float_optional("OPENROUTER_TIMEOUT_SEC", 120.0))
+# Количество HTTP retry при сетевых/5xx ошибках OpenRouter
+OPENROUTER_MAX_RETRIES: int = max(1, _get_int_optional("OPENROUTER_MAX_RETRIES", 3))
+# Использовать response_format/json_schema (если провайдер поддерживает)
+OPENROUTER_USE_STRUCTURED_OUTPUT: bool = _get_bool_optional(
+    "OPENROUTER_USE_STRUCTURED_OUTPUT", True
+)
+# Каждые N запросов логировать quality snapshot AI-пайплайна
+AI_QUALITY_LOG_EVERY_N: int = max(1, _get_int_optional("AI_QUALITY_LOG_EVERY_N", 25))
 # Жесткий тайм-аут скачивания файла из Telegram (сек)
 TG_FILE_DOWNLOAD_TIMEOUT_SEC: float = max(
     1.0, _get_float_optional("TG_FILE_DOWNLOAD_TIMEOUT_SEC", 20.0)

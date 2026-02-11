@@ -187,13 +187,16 @@ class TestRowDataMapping:
         # M: Shares
         assert metrics["shares"] is not None
 
-        # N: Retention 3s
+        # N: Saves
+        assert metrics["saves"] is not None
+
+        # O: Retention 3s
         assert "retention_3s" in metrics
 
-        # O: Avg Watch Time (%)
+        # P: Avg Watch Time (%)
         assert "avg_watch_time_pct" in metrics
 
-        # P: Engagement Rate (%) - calculated
+        # Q: Engagement Rate (%) - calculated
         if metrics["views"] > 0:
             er = (metrics["likes"] + metrics["comments"] + metrics["shares"] + metrics["saves"]) / metrics["views"] * 100
             assert er >= 0
@@ -279,8 +282,8 @@ class TestSyncExportToSheet:
         call_args = mock_worksheet.append_row.call_args[0][0]
         assert len(call_args) == 18
         # Check defaults for missing fields
-        assert call_args[2] == "Video"  # Default content type
-        assert call_args[9] == 100  # Views
+        assert call_args[2] == "video"  # Default content type
+        assert call_args[9] == "100"  # Views
 
     def test_export_skipped_when_not_configured(self):
         """Should skip export when credentials not configured."""
@@ -378,8 +381,8 @@ class TestRowStructure:
                 call_args = mock_worksheet.append_row.call_args[0][0]
                 assert call_args[2] == "Carousel"
 
-    def test_column_n_retention_format(self, sample_ai_response_video):
-        """Column N should format retention with % sign."""
+    def test_column_o_retention_format(self, sample_ai_response_video):
+        """Column O should format retention with % sign."""
         with patch("src.services.sheets_service._get_client") as mock_get_client:
             with patch("src.services.sheets_service._get_worksheet") as mock_get_worksheet:
                 mock_worksheet = Mock()
@@ -391,11 +394,11 @@ class TestRowStructure:
                         export_video_to_sheet(sample_ai_response_video)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
-                retention = call_args[13]  # Column N (0-indexed: 13)
+                retention = call_args[14]  # Column O (0-indexed: 14)
                 assert "%" in str(retention)
 
-    def test_column_o_avg_watch_time_format(self, sample_ai_response_video):
-        """Column O should format avg watch time with % sign."""
+    def test_column_p_avg_watch_time_format(self, sample_ai_response_video):
+        """Column P should format avg watch time with % sign."""
         with patch("src.services.sheets_service._get_client") as mock_get_client:
             with patch("src.services.sheets_service._get_worksheet") as mock_get_worksheet:
                 mock_worksheet = Mock()
@@ -407,12 +410,12 @@ class TestRowStructure:
                         export_video_to_sheet(sample_ai_response_video)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
-                awt = call_args[14]  # Column O (0-indexed: 14)
+                awt = call_args[15]  # Column P (0-indexed: 15)
                 if awt != "Not Found":
                     assert "%" in str(awt)
 
-    def test_column_p_er_format(self, sample_ai_response_video):
-        """Column P should format ER with % and one decimal."""
+    def test_column_q_er_format(self, sample_ai_response_video):
+        """Column Q should format ER with % and one decimal."""
         with patch("src.services.sheets_service._get_client") as mock_get_client:
             with patch("src.services.sheets_service._get_worksheet") as mock_get_worksheet:
                 mock_worksheet = Mock()
@@ -424,7 +427,7 @@ class TestRowStructure:
                         export_video_to_sheet(sample_ai_response_video)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
-                er = call_args[15]  # Column P (0-indexed: 15)
+                er = call_args[16]  # Column Q (0-indexed: 16)
                 if er != "Not Found":
                     assert "%" in str(er)
 
@@ -461,8 +464,7 @@ class TestDataCompatibility:
             "hook_type": sample_ai_response_video.get("hook_type"),  # G
             "score": sample_ai_response_video.get("score"),  # H
             "verdict": sample_ai_response_video.get("verdict"),  # I
-            "analysis": sample_ai_response_video.get("analysis"),  # Q
-            "raw_response": sample_ai_response_video.get("raw_response"),  # R
+            "analysis": sample_ai_response_video.get("analysis"),  # R
         }
 
         for col, value in required_mappings.items():
@@ -475,8 +477,9 @@ class TestDataCompatibility:
             "likes": metrics.get("likes"),  # K
             "comments": metrics.get("comments"),  # L
             "shares": metrics.get("shares"),  # M
-            "retention_3s": metrics.get("retention_3s"),  # N
-            "avg_watch_time_pct": metrics.get("avg_watch_time_pct"),  # O
+            "saves": metrics.get("saves"),  # N
+            "retention_3s": metrics.get("retention_3s"),  # O
+            "avg_watch_time_pct": metrics.get("avg_watch_time_pct"),  # P
         }
 
         for col, value in metric_mappings.items():
