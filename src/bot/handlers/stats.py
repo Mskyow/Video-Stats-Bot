@@ -35,11 +35,14 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
     user_id = message.from_user.id
     logger.info("User %s requested /day_stats", user_id)
 
+    # Отправляем loading сообщение
+    loading_msg = await message.answer("⏳ Генерирую отчет...")
+
     # Получаем supabase_client из kwargs (передан middleware)
     supabase_client = kwargs.get("supabase_client")
     if not supabase_client:
         logger.error("supabase_client not found in handler kwargs for /day_stats")
-        await message.answer(
+        await loading_msg.edit_text(
             "⚠️ Ошибка подключения к базе данных.\n"
             "Попробуй позже."
         )
@@ -61,7 +64,7 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
         videos = get_videos_by_date_range(supabase_client, start_date, end_date)
 
         if not videos:
-            await message.answer(
+            await loading_msg.edit_text(
                 "📊 За последние 24 часа нет анализов.\n\n"
                 "Отправь скриншоты метрик видео."
             )
@@ -145,10 +148,35 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
             f"2. Средний балл за сегодня: {avg_score:.1f}/10",
             f"3. Высший балл за видео: {max_score:.1f}/10",
             f"4. Высшие просмотры на видео за сегодня: {formatted_views}",
-            "\nДля просмотра детальной статистики перейдите в Google таблицу👇"
         ]
         
         report_text = "\n".join(report_lines)
+        
+        # Генерация AI summary
+        try:
+            from src.ai.day_summary import generate_day_summary
+            ai_summary = await generate_day_summary(videos)
+            if ai_summary:
+                ai_block = "\n\n━━━━━━━━━━━━━━━━━━━━━\n"
+                ai_block += "🤖 <b>AI АНАЛИЗ ДНЯ</b>\n\n"
+                ai_block += ai_summary
+                # Telegram hard-limit: 4096 chars per message.
+                # Keep some buffer for footer and avoid broken delivery.
+                if len(report_text) + len(ai_block) > 3800:
+                    logger.warning("AI summary is too long for Telegram message; shrinking AI block.")
+                    ai_block = (
+                        "\n\n━━━━━━━━━━━━━━━━━━━━━\n"
+                        "🤖 <b>AI АНАЛИЗ ДНЯ</b>\n\n"
+                        "Summary сокращен из-за лимита Telegram сообщения.\n"
+                        "Сфокусируйся на топовых hook-кластерах и метриках из таблицы."
+                    )
+                report_text += ai_block
+        except Exception as e:
+            logger.warning("Failed to generate AI summary: %s", e)
+            # Продолжаем без summary если AI не сработал
+        
+        # Добавляем ссылку на Google Sheets в конец
+        report_text += "\n\nДля просмотра детальной статистики перейдите в Google таблицу👇"
 
         # Клавиатура с кнопкой
         markup = None
@@ -159,11 +187,11 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
                 [InlineKeyboardButton(text="📊 Перейти в Google Таблицу", url=sheet_url)]
             ])
 
-        await message.answer(report_text, reply_markup=markup, parse_mode="HTML")
+        await loading_msg.edit_text(report_text, reply_markup=markup, parse_mode="HTML")
         
     except Exception as e:
         logger.exception("Error fetching day stats: %s", e)
-        await message.answer(
+        await loading_msg.edit_text(
             "⚠️ Ошибка при получении статистики.\n"
             "Попробуй позже."
         )

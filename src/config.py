@@ -68,9 +68,8 @@ OPENROUTER_API_KEY: str = _get("OPENROUTER_API_KEY")
 SUPABASE_URL: str = _get("SUPABASE_URL")
 SUPABASE_KEY: str = _get("SUPABASE_KEY")
 
-# Опциональные (OpenRouter: по умолчанию Gemini 3 Flash с thinking)
+# Опциональные
 AUTH_SECRET: str | None = _get_optional("AUTH_SECRET")
-OPENROUTER_MODEL: str | None = _get_optional("OPENROUTER_MODEL")
 LOG_LEVEL: str = _get_optional("LOG_LEVEL") or "INFO"
 WEBHOOK_URL: str | None = _get_optional("WEBHOOK_URL")
 WEBHOOK_PATH: str = _get_optional("WEBHOOK_PATH") or "/webhook"
@@ -104,6 +103,16 @@ TG_FILE_DOWNLOAD_TIMEOUT_SEC: float = max(
 )
 # Задержка между записями в таблицу (секунды)
 SHEETS_WRITE_DELAY: float = 1.2
+
+# AI model policy (strict):
+# Always use Gemini 3 Flash via OpenRouter with reasoning.effort=medium.
+OPENROUTER_MODEL: str = "google/gemini-3-flash-preview"
+
+# AI Day Summary настройки
+ENABLE_DAY_SUMMARY: bool = _get_bool_optional("ENABLE_DAY_SUMMARY", True)
+DAY_SUMMARY_MODEL: str = "google/gemini-3-flash-preview"
+DAY_SUMMARY_MAX_TOKENS: int = max(100, _get_int_optional("DAY_SUMMARY_MAX_TOKENS", 1500))
+DAY_SUMMARY_TEMPERATURE: float = max(0.0, min(2.0, _get_float_optional("DAY_SUMMARY_TEMPERATURE", 0.7)))
 
 
 def setup_logging() -> None:

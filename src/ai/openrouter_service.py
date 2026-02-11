@@ -567,11 +567,6 @@ def _clamp(value: float | None, min_value: float, max_value: float) -> float | N
     return max(min_value, min(max_value, value))
 
 
-def _supports_reasoning(model: str) -> bool:
-    lower_model = model.lower()
-    return "thinking" in lower_model or "reasoning" in lower_model or "gemini-3" in lower_model
-
-
 def _normalize_platform(value: Any) -> str:
     text = (str(value) if value is not None else "other").strip().lower()
     if "tiktok" in text:
@@ -641,8 +636,7 @@ def _build_payload(
     structured_output: bool = True,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"model": model, "messages": messages}
-    if _supports_reasoning(model):
-        payload["reasoning"] = {"effort": "medium"}
+    payload["reasoning"] = {"effort": "medium"}
     if structured_output and schema_name and schema:
         payload["response_format"] = {
             "type": "json_schema",
@@ -1123,7 +1117,9 @@ def analyze_screenshot(
         parsed_result: распарсенный JSON или None.
         raw_response_text: сырой текст ответа для дебага.
     """
-    model = getattr(config, "OPENROUTER_MODEL", None) or DEFAULT_MODEL
+    # Strict model policy for all AI analysis calls.
+    model = DEFAULT_MODEL
+    logger.info("OpenRouter AI call: model=%s reasoning_effort=medium", model)
     api_key = getattr(config, "OPENROUTER_API_KEY", "")
     timeout_sec = float(getattr(config, "OPENROUTER_TIMEOUT_SEC", 120.0))
     max_retries = int(getattr(config, "OPENROUTER_MAX_RETRIES", 3))
