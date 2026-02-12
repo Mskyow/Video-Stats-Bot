@@ -66,20 +66,26 @@ _HOOK_STOPWORDS = {
 _SUMMARY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "overview": {"type": "string"},
-        "best_hooks": {"type": "array", "items": {"type": "string"}},
-        "worked_today": {"type": "array", "items": {"type": "string"}},
-        "best_cases": {"type": "array", "items": {"type": "string"}},
-        "recommendations": {"type": "array", "items": {"type": "string"}},
-        "evidence_refs": {"type": "array", "items": {"type": "string"}},
+        "overview_text": {"type": "string"},
+        "top_hooks_list": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": 5,
+        },
+        "patterns_analysis": {"type": "string"},
+        "action_items": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": 4,
+        },
     },
     "required": [
-        "overview",
-        "best_hooks",
-        "worked_today",
-        "best_cases",
-        "recommendations",
-        "evidence_refs",
+        "overview_text",
+        "top_hooks_list",
+        "patterns_analysis",
+        "action_items",
     ],
     "additionalProperties": False,
 }
@@ -175,11 +181,168 @@ def _median(values: list[float]) -> float | None:
     return round(float(statistics.median(values)), 3)
 
 
+def _percent_delta(value: float | None, baseline: float | None) -> float | None:
+    if value is None or baseline is None or baseline == 0:
+        return None
+    return round(((value - baseline) / abs(baseline)) * 100.0, 2)
+
+
+def _compute_confidence_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    sample_size = len(rows)
+    if sample_size <= 0:
+        return {
+            "label": "низкая",
+            "sample_size": 0,
+            "score_coverage_pct": 0.0,
+            "retention_coverage_pct": 0.0,
+            "reason": "Нет данных.",
+        }
+
+    score_count = sum(1 for row in rows if _safe_float(row.get("score")) is not None)
+    retention_count = sum(1 for row in rows if _safe_float(row.get("retention_3s")) is not None)
+    score_coverage_pct = round((score_count / sample_size) * 100.0, 1)
+    retention_coverage_pct = round((retention_count / sample_size) * 100.0, 1)
+    min_coverage = min(score_coverage_pct, retention_coverage_pct)
+
+    if sample_size >= 12 and min_coverage >= 75.0:
+        label = "высокая"
+    elif sample_size >= 6 and min_coverage >= 50.0:
+        label = "средняя"
+    else:
+        label = "низкая"
+
+    reason = (
+        f"n={sample_size}, покрытие score={score_coverage_pct:.1f}%, "
+        f"retention_3s={retention_coverage_pct:.1f}%."
+    )
+    return {
+        "label": label,
+        "sample_size": sample_size,
+        "score_coverage_pct": score_coverage_pct,
+        "retention_coverage_pct": retention_coverage_pct,
+        "reason": reason,
+    }
+
+
+def _has_numeric_kpi(text: str) -> bool:
+    lowered = text.lower()
+    has_number = bool(re.search(r"\d", lowered))
+    has_metric = bool(
+        re.search(
+            r"(retention|score|views|completion|share|save|ctr|er|удерж|просмотр|лайк|коммент)",
+            lowered,
+        )
+    )
+    return has_number and has_metric
+
+
+def _sanitize_summary_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+
+    top_hooks_raw = payload.get("top_hooks_list")
+    top_hooks_list = []
+    if isinstance(top_hooks_raw, list):
+        top_hooks_list = [str(item).strip() for item in top_hooks_raw if str(item).strip()]
+
+    action_items_raw = payload.get("action_items")
+    action_items = []
+    if isinstance(action_items_raw, list):
+        action_items = [str(item).strip() for item in action_items_raw if str(item).strip()]
+
+    return {
+        "overview_text": str(payload.get("overview_text", "")).strip(),
+        "top_hooks_list": top_hooks_list,
+        "patterns_analysis": str(payload.get("patterns_analysis", "")).strip(),
+        "action_items": action_items,
+    }
+
+
+def _enhance_summary_payload(payload: dict[str, Any], evidence: dict[str, Any] | None) -> dict[str, Any]:
+    enhanced = dict(payload)
+    baseline = (evidence or {}).get("baseline") or {}
+    confidence = (evidence or {}).get("confidence") or {}
+
+    overview_text = str(enhanced.get("overview_text", "")).strip()
+    if confidence:
+        confidence_line = (
+            f"Уверенность анализа: {confidence.get('label', 'н/д')} "
+            f"({confidence.get('reason', 'недостаточно данных')})"
+        ).strip()
+        if confidence_line and "уверенность" not in overview_text.lower():
+            overview_text = f"{overview_text} {confidence_line}".strip()
+    enhanced["overview_text"] = overview_text
+
+    patterns_text = str(enhanced.get("patterns_analysis", "")).strip()
+    baseline_score = _safe_float(baseline.get("overall_median_score"))
+    baseline_retention = _safe_float(baseline.get("overall_median_retention_3s"))
+    hero_score_delta = _safe_float(baseline.get("hero_score_delta_pct"))
+    hero_retention_delta = _safe_float(baseline.get("hero_retention_delta_pct"))
+    baseline_suffix_parts: list[str] = []
+    if baseline_score is not None:
+        baseline_suffix_parts.append(f"median score={baseline_score:.2f}")
+    if baseline_retention is not None:
+        baseline_suffix_parts.append(f"median retention_3s={baseline_retention:.2f}%")
+    if hero_score_delta is not None:
+        baseline_suffix_parts.append(f"hero score vs baseline={hero_score_delta:+.1f}%")
+    if hero_retention_delta is not None:
+        baseline_suffix_parts.append(f"hero retention vs baseline={hero_retention_delta:+.1f}%")
+    if baseline_suffix_parts and "baseline" not in patterns_text.lower():
+        baseline_suffix = "; ".join(baseline_suffix_parts)
+        patterns_text = f"{patterns_text} Baseline: {baseline_suffix}.".strip()
+    enhanced["patterns_analysis"] = patterns_text
+
+    top_hooks = enhanced.get("top_hooks_list")
+    if not isinstance(top_hooks, list):
+        top_hooks = []
+    if not top_hooks and evidence:
+        top_hooks_data = evidence.get("top_hooks_data") or []
+        for hook in top_hooks_data:
+            hook_text = _trim_text(hook.get("hook_text") or "Нет данных", limit=90)
+            retention = _safe_float(hook.get("retention_3s"))
+            retention_text = f"{retention:.1f}%" if retention is not None else "н/д%"
+            top_hooks.append(f"{hook_text} ({retention_text})")
+    enhanced["top_hooks_list"] = top_hooks
+
+    action_items = enhanced.get("action_items")
+    if not isinstance(action_items, list):
+        action_items = []
+    if not action_items and evidence:
+        action_items = [
+            "Scale the hero format: увеличить долю hero-форматов и протестировать 2 новых хука (KPI: +5% retention_3s за 24 часа).",
+            "Fix the weak points: переписать слабые первые 3 секунды у long-видео (KPI: +0.5 к avg_score long-видео за 24 часа).",
+        ]
+    else:
+        retention_target = _safe_float(baseline.get("overall_median_retention_3s"))
+        score_target = _safe_float(baseline.get("overall_median_score"))
+        enriched_actions: list[str] = []
+        for idx, item in enumerate(action_items):
+            item_text = str(item).strip()
+            if not item_text:
+                continue
+            if _has_numeric_kpi(item_text):
+                enriched_actions.append(item_text)
+                continue
+            if idx == 0 and retention_target is not None:
+                kpi = f"KPI: retention_3s >= {retention_target + 2.0:.1f}% в течение 24ч"
+            elif score_target is not None:
+                kpi = f"KPI: avg_score >= {score_target + 0.5:.2f} в течение 24ч"
+            else:
+                kpi = "KPI: указать числовую цель по retention_3s или avg_score на 24ч"
+            punct = "" if item_text.endswith((".", "!", "?")) else "."
+            enriched_actions.append(f"{item_text}{punct} ({kpi}).")
+        action_items = enriched_actions
+    enhanced["action_items"] = action_items
+    return enhanced
+
+
 def _extract_compact_video(video: dict[str, Any]) -> dict[str, Any]:
     metrics = video.get("metrics") or {}
     hook_text = _trim_text(video.get("hook_text") or video.get("title") or "", limit=140)
     score = _safe_float(video.get("score"))
     views = _safe_int(metrics.get("views") or metrics.get("view_count"))
+    likes = _safe_int(metrics.get("likes") or metrics.get("like_count"))
+    comments = _safe_int(metrics.get("comments") or metrics.get("comment_count"))
 
     row = {
         "id": str(video.get("id") or ""),
@@ -190,6 +353,8 @@ def _extract_compact_video(video: dict[str, Any]) -> dict[str, Any]:
         "hook_type": _normalize_hook_type(metrics.get("hook_type")),
         "video_duration_sec": _safe_int(video.get("video_duration_sec")),
         "views": views,
+        "likes": likes,
+        "comments": comments,
         "retention_3s": _safe_float(metrics.get("retention_3s")),
         "completion_rate": _safe_float(metrics.get("completion_rate")),
         "share_rate": _safe_float(metrics.get("share_rate")),
@@ -336,6 +501,8 @@ def _sanitize_rows_for_prompt(rows: list[dict[str, Any]]) -> list[dict[str, Any]
             "hook_type": row.get("hook_type"),
             "video_duration_sec": row.get("video_duration_sec"),
             "views": row.get("views"),
+            "likes": row.get("likes"),
+            "comments": row.get("comments"),
             "retention_3s": row.get("retention_3s"),
             "completion_rate": row.get("completion_rate"),
             "share_rate": row.get("share_rate"),
@@ -348,6 +515,43 @@ def _sanitize_rows_for_prompt(rows: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 def _build_evidence(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    def _hero_video_sort_key(row: dict[str, Any]) -> tuple[int, float, float]:
+        views_value = _safe_float(row.get("views"))
+        score_value = _safe_float(row.get("score"))
+        return (
+            1 if views_value is not None else 0,
+            views_value if views_value is not None else -1e12,
+            score_value if score_value is not None else -1e12,
+        )
+
+    def _resolve_duration_group(row: dict[str, Any]) -> str | None:
+        duration_sec = _safe_float(row.get("video_duration_sec"))
+        if duration_sec is not None:
+            return "short" if duration_sec < 30 else "long"
+
+        for flag_key, label in (("is_short", "short"), ("is_long", "long")):
+            flag_value = row.get(flag_key)
+            if isinstance(flag_value, bool) and flag_value:
+                return label
+            if isinstance(flag_value, str) and flag_value.strip().lower() in {"1", "true", "yes"}:
+                return label
+
+        duration_hint = str(
+            row.get("duration_bucket")
+            or row.get("duration_type")
+            or row.get("duration_category")
+            or ""
+        ).strip().lower()
+        if "short" in duration_hint:
+            return "short"
+        if "long" in duration_hint:
+            return "long"
+
+        hook_type_hint = str(row.get("hook_type") or "").strip().lower()
+        if hook_type_hint in {"short", "long"}:
+            return hook_type_hint
+        return None
+
     total_videos = len(rows)
     scores = [float(row["score"]) for row in rows if row.get("score") is not None]
     retentions = [float(row["retention_3s"]) for row in rows if row.get("retention_3s") is not None]
@@ -371,6 +575,58 @@ def _build_evidence(rows: list[dict[str, Any]]) -> dict[str, Any]:
         for item in hook_type_stats
         if item["count"] >= 2 and item["avg_score"] is not None and item["avg_score"] <= 5.0
     ]
+
+    hero_video_row = max(rows, key=_hero_video_sort_key, default=None)
+    hero_video = None
+    if hero_video_row is not None:
+        hero_video = {
+            key: value for key, value in hero_video_row.items() if not str(key).startswith("_")
+        }
+
+    top_hooks_ranked = sorted(
+        [row for row in rows if _safe_float(row.get("retention_3s")) is not None],
+        key=lambda row: float(_safe_float(row.get("retention_3s")) or -1e12),
+        reverse=True,
+    )
+    top_hooks_data = [
+        {
+            "hook_text": row.get("hook_text"),
+            "retention_3s": _safe_float(row.get("retention_3s")),
+        }
+        for row in top_hooks_ranked[:3]
+    ]
+    hero_score = _safe_float((hero_video or {}).get("score"))
+    hero_retention = _safe_float((hero_video or {}).get("retention_3s"))
+    overall_score_median = _median(scores)
+    overall_retention_median = _median(retentions)
+    baseline_snapshot = {
+        "overall_median_score": overall_score_median,
+        "overall_median_retention_3s": overall_retention_median,
+        "hero_score_delta_pct": _percent_delta(hero_score, overall_score_median),
+        "hero_retention_delta_pct": _percent_delta(hero_retention, overall_retention_median),
+    }
+
+    duration_groups: dict[str, list[dict[str, Any]]] = {"short": [], "long": []}
+    for row in rows:
+        duration_group = _resolve_duration_group(row)
+        if duration_group in duration_groups:
+            duration_groups[duration_group].append(row)
+
+    short_vs_long = {}
+    for duration_group, duration_rows in duration_groups.items():
+        duration_scores = [
+            float(row["score"]) for row in duration_rows if row.get("score") is not None
+        ]
+        duration_retentions = [
+            float(row["retention_3s"]) for row in duration_rows if row.get("retention_3s") is not None
+        ]
+        avg_score = _mean(duration_scores)
+        short_vs_long[duration_group] = {
+            "count": len(duration_rows),
+            "avg_score": avg_score,
+            "median_retention_3s": _median(duration_retentions),
+            "avg_score_delta_vs_overview_pct": _percent_delta(avg_score, _mean(scores)),
+        }
 
     top_examples = rows[:5]
     low_examples = sorted(
@@ -397,6 +653,11 @@ def _build_evidence(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "strong_hook_types": strong_hook_types,
             "weak_hook_types": weak_hook_types,
         },
+        "hero_video": hero_video,
+        "top_hooks_data": top_hooks_data,
+        "short_vs_long": short_vs_long,
+        "baseline": baseline_snapshot,
+        "confidence": _compute_confidence_snapshot(rows),
         "hook_clusters": hook_clusters[:8],
         "top_examples": _sanitize_rows_for_prompt(top_examples),
         "low_examples": _sanitize_rows_for_prompt(low_examples),
@@ -413,6 +674,11 @@ def _build_summary_prompt(evidence: dict[str, Any]) -> str:
     overview_json = json.dumps(evidence.get("overview", {}), ensure_ascii=False, indent=2)
     group_metrics_json = json.dumps(evidence.get("group_metrics", {}), ensure_ascii=False, indent=2)
     patterns_json = json.dumps(evidence.get("patterns", {}), ensure_ascii=False, indent=2)
+    hero_video_json = json.dumps(evidence.get("hero_video", {}), ensure_ascii=False, indent=2)
+    top_hooks_data_json = json.dumps(evidence.get("top_hooks_data", []), ensure_ascii=False, indent=2)
+    short_vs_long_json = json.dumps(evidence.get("short_vs_long", {}), ensure_ascii=False, indent=2)
+    baseline_json = json.dumps(evidence.get("baseline", {}), ensure_ascii=False, indent=2)
+    confidence_json = json.dumps(evidence.get("confidence", {}), ensure_ascii=False, indent=2)
     clusters_json = json.dumps(evidence.get("hook_clusters", []), ensure_ascii=False, indent=2)
     top_examples_json = json.dumps(evidence.get("top_examples", []), ensure_ascii=False, indent=2)
     low_examples_json = json.dumps(evidence.get("low_examples", []), ensure_ascii=False, indent=2)
@@ -420,9 +686,11 @@ def _build_summary_prompt(evidence: dict[str, Any]) -> str:
 
     return f"""Ты — Senior Growth Analyst для short-form контента.
 Твоя задача: дать day summary ТОЛЬКО на основе фактов ниже.
+Отвечай строго на русском языке.
 
 ВНИМАНИЕ: Используй только benchmark-цифры из BENCHMARK_SNAPSHOT (ниже).
 Не выдумывай пороги и не подменяй значения.
+YOU MUST NOT CALCULATE SUMS. Use the provided 'HERO VIDEO' data for the Overview section completely.
 
 BENCHMARK_SNAPSHOT (из src/ai/benchmarks.py):
 {benchmark_json}
@@ -436,6 +704,21 @@ EVIDENCE GROUP METRICS:
 EVIDENCE PATTERNS:
 {patterns_json}
 
+HERO VIDEO (PRE-CALCULATED):
+{hero_video_json}
+
+TOP HOOKS (PRE-CALCULATED):
+{top_hooks_data_json}
+
+SHORT VS LONG (PRE-CALCULATED):
+{short_vs_long_json}
+
+BASELINE SNAPSHOT (PRE-CALCULATED):
+{baseline_json}
+
+CONFIDENCE SNAPSHOT (PRE-CALCULATED):
+{confidence_json}
+
 EVIDENCE HOOK CLUSTERS:
 {clusters_json}
 
@@ -448,14 +731,18 @@ LOW EXAMPLES:
 COMPACT DATASET (ALL DAY VIDEOS):
 {compact_videos_json}
 
-Верни строго JSON-объект по схеме (структура должна быть стабильной изо дня в день):
+Визуальный шаблон разделов (ориентир, не markdown-вывод):
+📊 Общая картина: ...
+🎣 Лучшие хуки: ...
+🏆 Лучшие кейсы: ...
+💡 Что делать: ...
+
+Верни строго JSON-объект по схеме:
 {{
-  "overview": "1-2 предложения с цифрами",
-  "best_hooks": ["какие хуки показали лучший результат и почему (с цифрами)"],
-  "worked_today": ["что лучше всего сработало сегодня (с цифрами)"],
-  "best_cases": ["лучшие кейсы за день (конкретные примеры и метрики)"],
-  "recommendations": ["что делать сегодня: метрика -> действие", "2-3 пункта"],
-  "evidence_refs": ["ссылка на конкретный факт/кластер/группу с цифрами", "еще 1-2 ссылки"]
+  "overview_text": "Структурный текст по HERO VIDEO + confidence (из CONFIDENCE SNAPSHOT).",
+  "top_hooks_list": ["Text (Retention%)"],
+  "patterns_analysis": "Анализ Short vs Long с опорой на BASELINE SNAPSHOT (сравнение vs baseline).",
+  "action_items": ["Scale ... KPI: <число + метрика + 24ч>"]
 }}
 
 Ограничения:
@@ -463,6 +750,11 @@ COMPACT DATASET (ALL DAY VIDEOS):
 - Каждый блок должен ссылаться на числа из evidence.
 - Не выдумывай метрики или пороги.
 - Если данных мало, явно пиши "недостаточно данных".
+- overview_text формируй полностью из HERO VIDEO.
+- В overview_text добавь confidence-оценку из CONFIDENCE SNAPSHOT.
+- top_hooks_list: минимум 1 строка в формате "Text (Retention%)".
+- patterns_analysis: только про Short vs Long performance + сравнение vs baseline.
+- action_items: 1-4 конкретные рекомендации; каждая строка обязана содержать KPI (число + метрика + срок 24ч).
 """
 
 
@@ -580,7 +872,11 @@ def _build_payload(
             {
                 "role": "system",
                 "content": (
-                    "Ты Senior Growth Analyst. Используешь только предоставленные факты и пороги. "
+                    "Ты Senior Growth Analyst. Отвечай строго на русском языке. "
+                    "Используешь только предоставленные факты и пороги. "
+                    "YOU MUST NOT CALCULATE SUMS. Use the provided 'HERO VIDEO' data for the Overview section completely. "
+                    "Следуй шаблону разделов: 📊 Общая картина: ... 🎣 Лучшие хуки: ... "
+                    "🏆 Лучшие кейсы: ... 💡 Что делать: ... "
                     "Возвращаешь строгий JSON без markdown."
                 ),
             },
@@ -715,48 +1011,42 @@ def _parse_summary_payload(response_text: str) -> dict[str, Any] | None:
 def _validate_summary_payload(payload: dict[str, Any] | None) -> tuple[bool, list[str]]:
     if not isinstance(payload, dict):
         return False, ["Payload is not an object"]
-
-    required_fields = (
-        "overview",
-        "best_hooks",
-        "worked_today",
-        "best_cases",
-        "recommendations",
-        "evidence_refs",
-    )
     errors: list[str] = []
-    for key in required_fields:
-        if key not in payload:
-            errors.append(f"Missing field: {key}")
 
-    if errors:
-        return False, errors
+    if not isinstance(payload.get("overview_text"), str) or not payload["overview_text"].strip():
+        errors.append("overview_text should be non-empty string")
 
-    if not isinstance(payload.get("overview"), str) or not payload["overview"].strip():
-        errors.append("overview must be non-empty string")
-
-    for list_key in ("best_hooks", "worked_today", "best_cases", "recommendations", "evidence_refs"):
-        items = payload.get(list_key)
-        if not isinstance(items, list) or not items:
-            errors.append(f"{list_key} must be non-empty list")
-            continue
-        for item in items:
+    top_hooks_list = payload.get("top_hooks_list")
+    if not isinstance(top_hooks_list, list):
+        errors.append("top_hooks_list must be a list")
+    else:
+        for item in top_hooks_list:
             if not isinstance(item, str) or not item.strip():
-                errors.append(f"{list_key} contains empty item")
+                errors.append("top_hooks_list contains empty item")
                 break
 
-    if isinstance(payload.get("recommendations"), list) and len(payload["recommendations"]) < 2:
-        errors.append("recommendations must include at least 2 items")
+    if not isinstance(payload.get("patterns_analysis"), str) or not payload["patterns_analysis"].strip():
+        errors.append("patterns_analysis must be non-empty string")
 
-    joined_text = " ".join(
-        [str(payload.get("overview", ""))]
-        + [str(x) for x in payload.get("best_hooks", [])]
-        + [str(x) for x in payload.get("worked_today", [])]
-        + [str(x) for x in payload.get("best_cases", [])]
-        + [str(x) for x in payload.get("recommendations", [])]
+    action_items = payload.get("action_items")
+    if not isinstance(action_items, list):
+        errors.append("action_items must be a list")
+    else:
+        for item in action_items:
+            if not isinstance(item, str) or not item.strip():
+                errors.append("action_items contains empty item")
+                break
+
+    non_empty_sections = sum(
+        [
+            1 if str(payload.get("overview_text", "")).strip() else 0,
+            1 if str(payload.get("patterns_analysis", "")).strip() else 0,
+            1 if isinstance(payload.get("top_hooks_list"), list) and payload.get("top_hooks_list") else 0,
+            1 if isinstance(payload.get("action_items"), list) and payload.get("action_items") else 0,
+        ]
     )
-    if not re.search(r"\d", joined_text):
-        errors.append("summary must include numeric evidence")
+    if non_empty_sections == 0:
+        errors.append("payload contains no meaningful content")
 
     return len(errors) == 0, errors
 
@@ -764,29 +1054,40 @@ def _validate_summary_payload(payload: dict[str, Any] | None) -> tuple[bool, lis
 def _render_summary_payload(payload: dict[str, Any]) -> str:
     # Keep only our own trusted HTML tags (<b> section titles).
     # All dynamic content from AI/fallback is escaped to avoid Telegram HTML parse errors.
-    overview_line = html.escape(str(payload.get("overview", "")).strip(), quote=False)
-    best_hooks_lines = [f"• {html.escape(item.strip(), quote=False)}" for item in payload.get("best_hooks", [])]
-    worked_today_lines = [f"• {html.escape(item.strip(), quote=False)}" for item in payload.get("worked_today", [])]
-    best_cases_lines = [f"• {html.escape(item.strip(), quote=False)}" for item in payload.get("best_cases", [])]
-    recommendations_lines = [
-        f"• {html.escape(item.strip(), quote=False)}" for item in payload.get("recommendations", [])
-    ]
+    overview_line = html.escape(str(payload.get("overview_text", "")).strip(), quote=False) or "Нет данных"
+
+    top_hooks_lines: list[str] = []
+    top_hooks_raw = payload.get("top_hooks_list")
+    if isinstance(top_hooks_raw, list):
+        for index, item in enumerate(top_hooks_raw, start=1):
+            hook_text = html.escape(str(item).strip(), quote=False)
+            if hook_text:
+                top_hooks_lines.append(f"{index}. {hook_text}")
+
+    patterns_line = html.escape(str(payload.get("patterns_analysis", "")).strip(), quote=False) or "Нет данных"
+
+    action_items_lines: list[str] = []
+    action_items_raw = payload.get("action_items")
+    if isinstance(action_items_raw, list):
+        for item in action_items_raw:
+            action_text = html.escape(str(item).strip(), quote=False)
+            if action_text:
+                action_items_lines.append(f"• {action_text}")
 
     sections = [
+        "<b>🤖 AI АНАЛИЗ ДНЯ</b>",
+        "",
         "<b>📊 Общая картина:</b>",
         overview_line,
         "",
         "<b>🎣 Лучшие хуки:</b>",
-        "\n".join(best_hooks_lines) if best_hooks_lines else "• недостаточно данных",
-        "",
-        "<b>✅ Что сработало лучше всего:</b>",
-        "\n".join(worked_today_lines) if worked_today_lines else "• недостаточно данных",
+        "\n".join(top_hooks_lines) if top_hooks_lines else "Нет данных",
         "",
         "<b>🏆 Лучшие кейсы за сегодня:</b>",
-        "\n".join(best_cases_lines) if best_cases_lines else "• недостаточно данных",
+        patterns_line,
         "",
         "<b>💡 Что делать сегодня:</b>",
-        "\n".join(recommendations_lines) if recommendations_lines else "• недостаточно данных",
+        "\n".join(action_items_lines) if action_items_lines else "Нет данных",
     ]
     return "\n".join(sections).strip()
 
@@ -795,86 +1096,66 @@ def _fallback_summary(evidence: dict[str, Any]) -> str:
     """
     Deterministic fallback summary when LLM response is invalid/unavailable.
     """
-    overview = evidence.get("overview", {})
-    hook_stats = evidence.get("group_metrics", {}).get("hook_type", [])
-    clusters = evidence.get("hook_clusters", [])
+    hero_video = evidence.get("hero_video") or {}
+    top_hooks_data = evidence.get("top_hooks_data") or []
+    short_vs_long = evidence.get("short_vs_long") or {}
 
-    total = int(overview.get("total_videos") or 0)
-    avg_score = overview.get("avg_score")
-    avg_retention = overview.get("median_retention_3s")
-    avg_share = overview.get("avg_share_rate")
-
-    best_group = None
-    worst_group = None
-    if hook_stats:
-        ranked = [
-            row for row in hook_stats if row.get("count", 0) >= 2 and row.get("avg_score") is not None
-        ]
-        ranked.sort(key=lambda row: float(row["avg_score"]), reverse=True)
-        if ranked:
-            best_group = ranked[0]
-            worst_group = ranked[-1]
-
-    cluster_line = "недостаточно данных по похожим хукам"
-    if clusters:
-        top_cluster = clusters[0]
-        cluster_line = (
-            f"Кластер '{top_cluster['label']}' (n={top_cluster['size']}) показывает "
-            f"avg score {top_cluster.get('avg_score')} и median retention {top_cluster.get('median_retention_3s')}%."
-        )
-
-    best_hooks_lines: list[str] = []
-    worked_today_lines: list[str] = []
-    best_cases_lines: list[str] = []
-    recommendation_lines: list[str] = []
-
-    if best_group:
-        best_hooks_lines.append(
-            f"Hook type '{best_group['group']}' (n={best_group['count']}) даёт avg score "
-            f"{best_group.get('avg_score')} и avg share {best_group.get('avg_share_rate')}%."
-        )
-    if avg_share is not None:
-        worked_today_lines.append(f"Средний share rate по дню: {avg_share}% (ориентир viral: >1.5%).")
-    if not best_hooks_lines:
-        best_hooks_lines.append("Недостаточно данных для устойчивого вывода по лучшим хукам.")
-
-    worked_today_lines.append(cluster_line)
-    if not worked_today_lines:
-        worked_today_lines.append("Недостаточно данных для устойчивого вывода по победившим паттернам.")
-
-    if worst_group and worst_group is not best_group:
-        best_cases_lines.append(
-            f"Лучшая группа против слабой: '{best_group['group'] if best_group else 'n/a'}' "
-            f"vs '{worst_group['group']}' по avg score."
-        )
-    else:
-        best_cases_lines.append("Недостаточно данных для сравнительного кейса по группам.")
-
-    recommendation_lines.append("Масштабируй форматы, где retention 3s >70% и share rate >1.5%.")
-    recommendation_lines.append("Переделывай hook в группах с retention 3s <58%, не меняя всё видео целиком.")
-    recommendation_lines.append("Тестируй 2-3 вариации лучших hook-кластеров и отслеживай completion rate.")
+    views = hero_video.get("views")
+    likes = hero_video.get("likes")
+    comments = hero_video.get("comments")
+    score = hero_video.get("score")
 
     overview_line = (
-        f"За сутки {total} видео, средний score {avg_score if avg_score is not None else 'н/д'}/10, "
-        f"median retention 3s {avg_retention if avg_retention is not None else 'н/д'}%."
+        f"Hero-видео: Views={views if views is not None else 'н/д'}, "
+        f"Likes={likes if likes is not None else 'н/д'}, "
+        f"Comments={comments if comments is not None else 'н/д'}, "
+        f"Score={score if score is not None else 'н/д'}."
     )
 
+    top_hooks_list: list[str] = []
+    for hook in top_hooks_data:
+        hook_text = _trim_text(hook.get("hook_text") or "недостаточно данных", limit=90)
+        retention = _safe_float(hook.get("retention_3s"))
+        retention_text = f"{retention:.1f}%" if retention is not None else "н/д%"
+        top_hooks_list.append(f"{hook_text} ({retention_text})")
+
+    while len(top_hooks_list) < 3:
+        top_hooks_list.append("недостаточно данных (н/д%)")
+    top_hooks_list = top_hooks_list[:3]
+
+    short_info = short_vs_long.get("short") or {}
+    long_info = short_vs_long.get("long") or {}
+    baseline = evidence.get("baseline") or {}
+    confidence = evidence.get("confidence") or {}
+    baseline_score = _safe_float(baseline.get("overall_median_score"))
+    baseline_retention = _safe_float(baseline.get("overall_median_retention_3s"))
+    confidence_label = str(confidence.get("label") or "низкая")
+    confidence_reason = str(confidence.get("reason") or "недостаточно данных")
+    patterns_line = (
+        f"Short: count={short_info.get('count', 0)}, avg_score={short_info.get('avg_score', 'н/д')}; "
+        f"Long: count={long_info.get('count', 0)}, avg_score={long_info.get('avg_score', 'н/д')}. "
+        f"Baseline: median_score={baseline_score if baseline_score is not None else 'н/д'}, "
+        f"median_retention_3s={baseline_retention if baseline_retention is not None else 'н/д'}%."
+    )
+    overview_line = f"{overview_line} Уверенность анализа: {confidence_label} ({confidence_reason})"
+
     payload = {
-        "overview": overview_line,
-        "best_hooks": best_hooks_lines,
-        "worked_today": worked_today_lines,
-        "best_cases": best_cases_lines,
-        "recommendations": recommendation_lines,
-        "evidence_refs": ["deterministic_fallback"],
+        "overview_text": overview_line,
+        "top_hooks_list": top_hooks_list,
+        "patterns_analysis": patterns_line,
+        "action_items": [
+            "Scale the hero format: увеличь выпуск формата hero-видео и протестируй 2 вариации хука (KPI: +5% retention_3s за 24ч).",
+            "Fix the weak points: перепиши слабые хуки и усили первые 3 секунды у длинных роликов (KPI: +0.5 к avg_score long-видео за 24ч).",
+        ],
     }
-    return _render_summary_payload(payload)
+    return _render_summary_payload(_enhance_summary_payload(payload, evidence))
 
 
 def _parse_summary_response(response_text: str) -> str | None:
     """
     Parse raw model response and return rendered summary if valid.
     """
-    payload = _parse_summary_payload(response_text)
+    payload = _sanitize_summary_payload(_parse_summary_payload(response_text))
     is_valid, _ = _validate_summary_payload(payload)
     if not is_valid or payload is None:
         return None
@@ -960,10 +1241,10 @@ async def generate_day_summary(
 
     summary = None
     if raw_response:
-        payload = _parse_summary_payload(raw_response)
+        payload = _sanitize_summary_payload(_parse_summary_payload(raw_response))
         valid, errors = _validate_summary_payload(payload)
         if valid and payload is not None:
-            summary = _render_summary_payload(payload)
+            summary = _render_summary_payload(_enhance_summary_payload(payload, evidence))
         else:
             logger.warning("Invalid summary payload, fallback to deterministic summary: %s", "; ".join(errors))
 
