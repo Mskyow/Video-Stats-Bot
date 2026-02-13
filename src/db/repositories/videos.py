@@ -26,6 +26,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _to_optional_float(value: Any) -> float | None:
+    """Безопасно преобразует значение в float."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_posted_at_for_parsing(posted_at: Any) -> str | None:
     if posted_at is None:
         return None
@@ -179,6 +191,9 @@ def insert_video(
     if client is None:
         logger.warning("Supabase client not initialized; skip insert_video")
         return None
+    if not isinstance(result, dict):
+        logger.error("insert_video expects dict result, got: %s", type(result).__name__)
+        return None
 
     # Извлекаем данные для проверки дубликатов
     metrics = result.get("metrics") or {}
@@ -217,8 +232,10 @@ def insert_video(
             if value is None:
                 metrics[key] = 0
         calculated_rates = result.get("calculated_rates") or {}
-        tier_1 = result.get("tier_1_analysis") or {}
-        tier_2 = result.get("tier_2_analysis") or {}
+        tier_1_raw = result.get("tier_1_analysis")
+        tier_2_raw = result.get("tier_2_analysis")
+        tier_1 = tier_1_raw if isinstance(tier_1_raw, dict) else {}
+        tier_2 = tier_2_raw if isinstance(tier_2_raw, dict) else {}
 
         # Объединяем метрики и rates в одно поле
         full_metrics = {**metrics, **calculated_rates}
@@ -253,20 +270,31 @@ def insert_video(
 
         # Hook score из tier_1
         hook_rating = None
-        if tier_1.get("hook_3s"):
-            hook_rating = tier_1["hook_3s"].get("rating")
+        hook_3s = tier_1.get("hook_3s")
+        if isinstance(hook_3s, dict):
+            hook_rating = hook_3s.get("rating")
+        elif isinstance(hook_3s, str):
+            hook_rating = hook_3s
+        elif isinstance(result.get("hook_score"), str):
+            hook_rating = result.get("hook_score")
+
+        score_value = _to_optional_float(result.get("score")) or 0.0
+        duration_value = _to_optional_float(result.get("video_duration_sec"))
+        # В таблице поле целочисленное, поэтому нормализуем к int.
+        # Это защищает insert от значений вроде "7.85".
+        duration_int = int(round(duration_value)) if duration_value is not None else None
 
         payload: dict[str, Any] = {
             "user_id": user_id,
             "platform": result.get("platform"),
             "title": title,
             "metrics": full_metrics,
-            "score": float(result.get("score") or 0),
+            "score": score_value,
             "analysis": result.get("analysis"),
             "verdict": result.get("verdict"),
             "hook_score": hook_rating,
             "detailed_analysis": detailed,
-            "video_duration_sec": result.get("video_duration_sec"),
+            "video_duration_sec": duration_int,
             "content_type": result.get("content_type", "video"),
             "hook_text": result.get("hook_text"),
         }

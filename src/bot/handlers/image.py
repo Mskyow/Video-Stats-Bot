@@ -193,6 +193,8 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
         if res.success and res.ai_result:
             is_duplicate = False
             try:
+                db_saved = False
+
                 # 1. Попытка сохранения в Supabase
                 if supabase and user_id:
                     try:
@@ -208,9 +210,17 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
                             is_duplicate = True
                             res.error_message = "♻️ Дубликат (уже сохранено)"
                             duplicate_count += 1
+                        elif insert_res:
+                            db_saved = True
                         else:
-                            saved_count += 1
-                            
+                            res.success = False
+                            res.error_message = "⚠️ Ошибка сохранения в базу данных"
+                            failed_count += 1
+                            logger.error(
+                                "DB insert returned empty result batch_id=%s video_index=%s",
+                                batch_id,
+                                res.index,
+                            )
                     except Exception as e:
                         logger.exception(
                             "Failed to save video to Supabase batch_id=%s video_index=%s: %s",
@@ -218,16 +228,28 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
                             res.index,
                             e,
                         )
-                        # Считаем успешным, так как анализ прошел
-                        saved_count += 1
+                        res.success = False
+                        res.error_message = "⚠️ Ошибка сохранения в базу данных"
+                        failed_count += 1
                 else:
+                    db_saved = True
+
+                if db_saved and not is_duplicate:
                     saved_count += 1
 
-                # 2. Экспорт в Google Sheets (если не дубликат)
-                if not is_duplicate and GOOGLE_SHEET_ID:
-                    if res.raw_response:
-                        res.ai_result["raw_response"] = res.raw_response
-                    queue_export(res.ai_result)
+                    # 2. Экспорт в Google Sheets (fire-and-forget через очередь)
+                    if GOOGLE_SHEET_ID:
+                        try:
+                            if res.raw_response:
+                                res.ai_result["raw_response"] = res.raw_response
+                            queue_export(res.ai_result)
+                        except Exception as e:
+                            logger.exception(
+                                "Failed to queue Google Sheets export batch_id=%s video_index=%s: %s",
+                                batch_id,
+                                res.index,
+                                e,
+                            )
                 
             except Exception as e:
                 logger.exception(
@@ -236,9 +258,11 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
                     res.index,
                     e,
                 )
-                # Если упало на верхнем уровне
                 if not is_duplicate:
-                     saved_count += 1
+                    res.success = False
+                    if not res.error_message:
+                        res.error_message = "⚠️ Ошибка пост-обработки результата"
+                    failed_count += 1
         else:
             failed_count += 1
 
@@ -498,6 +522,6 @@ def build_summary_report(results: list[VideoProcessingResult], saved: int, faile
     report = header + "\n" + "\n".join(lines)
     
     if GOOGLE_SHEET_ID:
-        report += f"\n\n📤 Успешно отправлено в Google таблицу: {saved}/{total_videos}"
+        report += f"\n\n📤 Поставлено в очередь экспорта в Google таблицу: {saved}/{total_videos}"
         
     return report

@@ -339,6 +339,75 @@ class TestInsertVideo:
         # Verify the insert was called
         assert mock_supabase_client.table.called
 
+    def test_insert_handles_string_hook_3s(self, mock_supabase_client, sample_ai_response_video):
+        """Should not crash when hook_3s is returned as a string."""
+        mock_response = Mock()
+        mock_response.data = []
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = mock_response
+
+        captured_payload = {}
+
+        class InsertBuilder:
+            def __init__(self, payload):
+                captured_payload.update(payload)
+
+            def execute(self):
+                return Mock(data=[{"id": "hook-string-id"}])
+
+        def capture_insert(payload):
+            return InsertBuilder(payload)
+
+        mock_supabase_client.table.return_value.insert = capture_insert
+
+        ai_result = {
+            **sample_ai_response_video,
+            "tier_1_analysis": {"hook_3s": "GOOD"},
+        }
+
+        result = insert_video(
+            mock_supabase_client,
+            user_id=123,
+            result=ai_result,
+            raw_ai_response=None,
+        )
+
+        assert result is not None
+        assert result.get("id") == "hook-string-id"
+        assert captured_payload.get("hook_score") == "GOOD"
+
+    def test_insert_rounds_video_duration_to_int(self, mock_supabase_client, sample_ai_response_video):
+        """Should normalize fractional video_duration_sec for integer DB column."""
+        mock_response = Mock()
+        mock_response.data = []
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = mock_response
+
+        captured_payload = {}
+
+        class InsertBuilder:
+            def __init__(self, payload):
+                captured_payload.update(payload)
+
+            def execute(self):
+                return Mock(data=[{"id": "duration-id"}])
+
+        def capture_insert(payload):
+            return InsertBuilder(payload)
+
+        mock_supabase_client.table.return_value.insert = capture_insert
+
+        ai_result = {**sample_ai_response_video, "video_duration_sec": "7.85"}
+
+        result = insert_video(
+            mock_supabase_client,
+            user_id=123,
+            result=ai_result,
+            raw_ai_response=None,
+        )
+
+        assert result is not None
+        assert result.get("id") == "duration-id"
+        assert captured_payload.get("video_duration_sec") == 8
+
 
 class TestGetVideosByDateRange:
     """Tests for retrieving videos by date range."""
