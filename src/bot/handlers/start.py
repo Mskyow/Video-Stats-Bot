@@ -97,6 +97,22 @@ async def cmd_help(message: Message) -> None:
     await message.answer(HELP_TEXT, reply_markup=keyboard)
 
 
+# Оценка токенов и стоимости AI на один анализ ролика (2 вызова: extraction + scoring)
+# Данные из OpenRouter (Gemini 3 Flash): ~9.2k токенов, ~$0.017 на ролик
+ESTIMATED_TOKENS_PER_VIDEO = 9200
+ESTIMATED_COST_USD_PER_VIDEO = 0.017
+
+
+def _normalize_platform_for_stats(raw_platform: str) -> str:
+    """Приводит platform из БД к читаемому названию: TikTok / Instagram."""
+    p = (raw_platform or "").lower()
+    if "tiktok" in p:
+        return "TikTok"
+    if "reels" in p or "instagram" in p:
+        return "Instagram"
+    return raw_platform or "Другое"
+
+
 @router.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
     """Показывает сводную статистику анализов пользователя."""
@@ -121,27 +137,40 @@ async def cmd_stats(message: Message) -> None:
 
     total = stats["total"]
     avg = stats.get("avg_score", 0)
-    verdicts = stats.get("verdicts", {})
-    platforms = stats.get("platforms", {})
-    hook_stats = stats.get("hook_stats", {})
+    platforms_raw = stats.get("platforms", {})
+
+    # Считаем по платформам: TikTok и Instagram (reels)
+    platform_counts: dict[str, int] = {}
+    for p, count in platforms_raw.items():
+        name = _normalize_platform_for_stats(p)
+        platform_counts[name] = platform_counts.get(name, 0) + count
+
+    # Оценка токенов и стоимости на основе реальных данных OpenRouter
+    avg_tokens = ESTIMATED_TOKENS_PER_VIDEO
+    cost_per_video = ESTIMATED_COST_USD_PER_VIDEO
+    total_cost_est = total * cost_per_video
 
     lines = [
-        f"📊 <b>Твоя статистика</b>",
+        "📊 <b>Твоя статистика</b>",
         "",
-        f"📋 Анализов: <b>{total}</b>",
-        f"📈 Средний балл: <b>{avg}/10</b>",
+        f"📋 Всего видео: <b>{total}</b>",
+        "",
+        "📱 <b>По платформам:</b>",
     ]
 
-    if verdicts:
-        lines.append("")
-        lines.append("<b>Вердикты:</b>")
-        for v, count in sorted(verdicts.items(), key=lambda x: -x[1]):
-            lines.append(f"  {v}: {count}")
+    for plat in ("TikTok", "Instagram", "Другое"):
+        cnt = platform_counts.get(plat, 0)
+        if cnt > 0:
+            lines.append(f"   • {plat}: <b>{cnt}</b>")
 
-    if platforms:
-        lines.append("")
-        lines.append("<b>Платформы:</b>")
-        for p, count in sorted(platforms.items(), key=lambda x: -x[1]):
-            lines.append(f"  {p.upper()}: {count}")
+    lines.extend([
+        "",
+        f"📈 Средний балл: <b>{avg}/10</b>",
+        "",
+        "🤖 <b>AI (оценка по OpenRouter):</b>",
+        f"   • ~{avg_tokens:,} токенов на ролик".replace(",", " "),
+        f"   • ~${cost_per_video:.3f} за ролик",
+        f"   • Итого за {total} видео: ~${total_cost_est:.2f}",
+    ])
 
     await message.answer("\n".join(lines))
