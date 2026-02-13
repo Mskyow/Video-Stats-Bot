@@ -155,7 +155,8 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
         # Генерация AI summary
         try:
             from src.ai.day_summary import generate_day_summary
-            ai_summary = await generate_day_summary(videos)
+            ai_summary_min_videos = 3
+            ai_summary = await generate_day_summary(videos, min_videos=ai_summary_min_videos)
             if ai_summary:
                 ai_block = "\n\n━━━━━━━━━━━━━━━━━━━━━\n"
                 ai_block += "🤖 <b>AI АНАЛИЗ ДНЯ</b>\n\n"
@@ -171,6 +172,19 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
                         "Сфокусируйся на топовых hook-кластерах и метриках из таблицы."
                     )
                 report_text += ai_block
+            elif len(videos) < ai_summary_min_videos:
+                missing_videos = ai_summary_min_videos - len(videos)
+                missing_videos_text = (
+                    f"нужно еще {missing_videos} видео"
+                    if missing_videos > 0
+                    else "нужно больше данных"
+                )
+                report_text += (
+                    "\n\n━━━━━━━━━━━━━━━━━━━━━\n"
+                    "🤖 <b>AI АНАЛИЗ ДНЯ</b>\n\n"
+                    "Недостаточно данных для AI-сводки за сутки.\n"
+                    f"Сейчас: {len(videos)} видео, минимум: {ai_summary_min_videos} ({missing_videos_text})."
+                )
         except Exception as e:
             logger.warning("Failed to generate AI summary: %s", e)
             # Продолжаем без summary если AI не сработал
