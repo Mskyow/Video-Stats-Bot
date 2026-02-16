@@ -50,6 +50,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="stats", description="Моя статистика анализов"),
         BotCommand(command="day_stats", description="Отчет за последние 24 часа"),
         BotCommand(command="all_stats", description="Общая статистика по всем видео"),
+        BotCommand(command="send_report", description="Отправить отчёт в рабочий чат"),
     ]
 
     try:

@@ -19,13 +19,13 @@ from aiogram.types import Message, TelegramObject
 
 from src.db.repositories.users import get_user_status, register_user, promote_user_to_approved
 from src.config import AUTH_SECRET
-from src.bot.handlers.start import START_TEXT
+from src.bot.handlers.start import START_TEXT, WELCOME_UNAUTHORIZED_TEXT
 
 logger = logging.getLogger(__name__)
 
 PENDING_MESSAGE = (
-    "❌ У вас нет доступа.\n"
-    "Введите кодовое слово в формате /start КОДОВОЕ_СЛОВО"
+    "🔐 Для доступа введите команду:\n"
+    "<code>/start КОДОВОЕ_СЛОВО</code>"
 )
 
 ACCESS_GRANTED_MESSAGE = "Доступ разрешён✅"
@@ -33,12 +33,6 @@ ACCESS_GRANTED_MESSAGE = "Доступ разрешён✅"
 REJECTED_MESSAGE = (
     "❌ Доступ отклонён.\n\n"
     "По вопросам обратись к администратору."
-)
-
-FIRST_CONTACT_MESSAGE = (
-    "👋 Привет!\n\n"
-    "Я анализирую метрики видео из TikTok, Reels, Shorts.\n"
-    "Отправь код доступа, чтобы начать пользоваться."
 )
 
 
@@ -126,7 +120,7 @@ class AuthMiddleware(BaseMiddleware):
                 event.from_user.username,
             )
             await self._notify_admin_new_user(event)
-            await event.answer(FIRST_CONTACT_MESSAGE)
+            await event.answer(WELCOME_UNAUTHORIZED_TEXT)
             return None
 
         # Уже зарегистрирован, но pending

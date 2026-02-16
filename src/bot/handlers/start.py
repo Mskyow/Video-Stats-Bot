@@ -16,6 +16,14 @@ from src.db.supabase_client import get_supabase
 
 router = Router(name="start")
 
+WELCOME_UNAUTHORIZED_TEXT = (
+    "👋 <b>Привет!</b>\n\n"
+    "🤖 Я — <b>Creator Copilot</b>. С помощью искусственного интеллекта я анализирую скриншоты со статистикой твоих видео — <b>TikTok</b> и <b>Instagram Reels</b>.\n\n"
+    "🔐 Для доступа введи команду:\n"
+    "<code>/start КОДОВОЕ_СЛОВО</code>\n\n"
+    "Кодовое слово узнай у администратора."
+)
+
 START_TEXT = (
     "👋 <b>Привет! Я — Creator Copilot.</b>\n\n"
     "С помощью искусственного интеллекта я анализирую скриншоты со статистикой твоих видео (TikTok, Instagram Reels).\n\n"
@@ -77,12 +85,7 @@ async def cmd_start(message: Message) -> None:
 
     # Не авторизован и нет/неверный код
     if config.AUTH_SECRET:
-        await message.answer(
-            "🔒 <b>Бот защищён кодовым словом.</b>\n\n"
-            "Для доступа отправь:\n"
-            "<code>/start КОДОВОЕ_СЛОВО</code>\n\n"
-            "Или обратись к администратору."
-        )
+        await message.answer(WELCOME_UNAUTHORIZED_TEXT)
     else:
         # Если код не настроен — разрешаем доступ
         authorize_user(supabase, user.id)

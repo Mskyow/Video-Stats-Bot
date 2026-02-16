@@ -11,7 +11,12 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
-from src.config import GOOGLE_SHEET_ID
+from src.config import (
+    ADMIN_USER_ID,
+    GOOGLE_SHEET_ID,
+    REPORT_CHAT_ID,
+    REPORT_TOPIC_ID,
+)
 from src.db.repositories.videos import get_videos_by_date_range, get_global_stats
 
 logger = logging.getLogger(__name__)
@@ -195,6 +200,63 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
         await loading_msg.edit_text(
             "⚠️ Ошибка при получении статистики.\n"
             "Попробуй позже."
+        )
+
+
+@router.message(Command("send_report"))
+async def cmd_send_report(message: Message, **kwargs) -> None:
+    """
+    Ручная отправка отчёта за последние 24ч в рабочий чат (REPORT_CHAT_ID).
+    Доступна только администратору (ADMIN_USER_ID).
+    """
+    user = message.from_user
+    if not user:
+        return
+
+    if not ADMIN_USER_ID:
+        await message.answer("⚠️ Команда отключена (не задан ADMIN_USER_ID).")
+        return
+
+    if user.id != ADMIN_USER_ID:
+        await message.answer("⚠️ Команда доступна только администратору.")
+        return
+
+    if not REPORT_CHAT_ID:
+        await message.answer(
+            "⚠️ Рабочий чат не настроен. Задайте REPORT_CHAT_ID в переменных окружения."
+        )
+        return
+
+    loading_msg = await message.answer("⏳ Отправляю отчёт в рабочий чат...")
+
+    supabase_client = kwargs.get("supabase_client")
+    if not supabase_client:
+        logger.error("supabase_client not found in handler kwargs for /send_report")
+        await loading_msg.edit_text(
+            "⚠️ Ошибка подключения к базе данных. Попробуй позже."
+        )
+        return
+
+    try:
+        report_text, markup = await build_day_stats_report(supabase_client)
+        send_kwargs: dict = {
+            "chat_id": REPORT_CHAT_ID,
+            "text": report_text,
+            "parse_mode": "HTML",
+        }
+        if markup is not None:
+            send_kwargs["reply_markup"] = markup
+        if REPORT_TOPIC_ID is not None:
+            send_kwargs["message_thread_id"] = REPORT_TOPIC_ID
+
+        bot = message.bot
+        await bot.send_message(**send_kwargs)
+        await loading_msg.edit_text("✅ Отчёт отправлен в рабочий чат.")
+        logger.info("User %s triggered manual report send to chat %s", user.id, REPORT_CHAT_ID)
+    except Exception as e:
+        logger.exception("Failed to send report to work chat: %s", e)
+        await loading_msg.edit_text(
+            "⚠️ Не удалось отправить отчёт в рабочий чат. Попробуй позже."
         )
 
 

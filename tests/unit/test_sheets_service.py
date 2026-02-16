@@ -85,23 +85,23 @@ class TestCredentialsLoading:
         mock_creds_class.from_json_keyfile_name.assert_called_once()
 
     def test_credentials_error_when_not_configured(self):
-        """Should raise error when no credentials configured."""
+        """Should raise FileNotFoundError when no credentials configured."""
         with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", None):
             with patch("src.services.sheets_service.GOOGLE_SHEET_CREDENTIALS_PATH", None):
-                with pytest.raises(ValueError) as exc_info:
+                with pytest.raises(FileNotFoundError) as exc_info:
                     _get_credentials()
-                assert "Не заданы credentials" in str(exc_info.value)
+                assert "credentials not found" in str(exc_info.value).lower()
 
     @patch("src.services.sheets_service.json.loads")
     def test_credentials_error_invalid_json(self, mock_json_loads):
-        """Should raise error when JSON is invalid."""
+        """Should raise FileNotFoundError when JSON is invalid (code logs and raises same as not configured)."""
         mock_json_loads.side_effect = json.JSONDecodeError("test", "doc", 0)
 
         with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "invalid json"):
             with patch("src.services.sheets_service.GOOGLE_SHEET_CREDENTIALS_PATH", None):
-                with pytest.raises(ValueError) as exc_info:
+                with pytest.raises(FileNotFoundError) as exc_info:
                     _get_credentials()
-                assert "Невалидный JSON" in str(exc_info.value)
+                assert "credentials not found" in str(exc_info.value).lower()
 
 
 class TestClientAndWorksheet:
@@ -288,7 +288,7 @@ class TestSyncExportToSheet:
 
         assert result is True
         call_args = mock_worksheet.append_row.call_args[0][0]
-        assert call_args[2] == "Carousel"  # Column C: Content Type
+        assert call_args[2] == "carousel"  # Column C: Content Type (lowercase as in video_data)
 
     @patch("src.services.sheets_service._get_client")
     @patch("src.services.sheets_service._get_worksheet")
@@ -416,10 +416,10 @@ class TestRowStructure:
                         export_video_to_sheet(sample_ai_response_video)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
-                assert call_args[2] == "Video"
+                assert call_args[2] == "video"  # Column C: content_type from video_data (lowercase)
 
     def test_column_c_content_type_carousel(self, sample_ai_response_carousel):
-        """Column C should show 'Carousel' for carousel content."""
+        """Column C should show 'carousel' for carousel content."""
         with patch("src.services.sheets_service._get_client") as mock_get_client:
             with patch("src.services.sheets_service._get_worksheet") as mock_get_worksheet:
                 mock_worksheet = Mock()
@@ -431,7 +431,7 @@ class TestRowStructure:
                         export_video_to_sheet(sample_ai_response_carousel)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
-                assert call_args[2] == "Carousel"
+                assert call_args[2] == "carousel"  # Column C: content_type from video_data (lowercase)
 
     def test_column_o_retention_format(self, sample_ai_response_video):
         """Column O should format retention with % sign."""
@@ -489,14 +489,12 @@ class TestAsyncQueueExport:
 
     @pytest.mark.asyncio
     async def test_queue_export_adds_to_queue(self, sample_ai_response_video):
-        """Should add data to export queue."""
-        import asyncio
+        """Should add data to export queue via get_sheets_queue()."""
         test_queue = asyncio.Queue()
 
-        with patch("src.services.sheets_service._export_queue", test_queue):
-            await queue_export(sample_ai_response_video)
+        with patch("src.services.sheets_service.get_sheets_queue", return_value=test_queue):
+            queue_export(sample_ai_response_video)  # sync function
 
-            # Verify data was added to queue
             assert test_queue.qsize() == 1
             queued_data = await test_queue.get()
             assert queued_data == sample_ai_response_video
