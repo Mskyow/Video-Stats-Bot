@@ -109,6 +109,231 @@ _SUMMARY_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+_HOOK_TRANSLATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "translations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "translation": {"type": "string"},
+                },
+                "required": ["source", "translation"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["translations"],
+    "additionalProperties": False,
+}
+
+_HOOK_TRANSLATION_CACHE: dict[str, str] = {}
+_CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+_LATIN_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ]")
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _normalize_hook_for_translation(hook_text: str) -> str:
+    normalized = str(hook_text or "").strip().strip('"').strip("'").strip("«»")
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip()
+
+
+def _split_hook_line(hook_line: str) -> tuple[str, str | None]:
+    stripped = str(hook_line or "").strip()
+    if not stripped:
+        return "", None
+    parts = re.split(r"\s+[—-]\s+", stripped, maxsplit=1)
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+    return stripped, None
+
+
+def _hook_has_russian_translation(hook_part: str) -> bool:
+    # If hook already has a Cyrillic phrase in parentheses, treat it as translated.
+    return bool(re.search(r"\([^)]*[А-Яа-яЁё][^)]*\)", hook_part))
+
+
+def _hook_needs_translation(hook_part: str) -> bool:
+    if _CYRILLIC_RE.search(hook_part):
+        return False
+    return bool(_LATIN_RE.search(hook_part))
+
+
+def _request_hook_translations(hook_texts: list[str]) -> dict[str, str]:
+    if not hook_texts:
+        return {}
+
+    api_key = getattr(config, "OPENROUTER_API_KEY", "")
+    if not isinstance(api_key, str) or not api_key.strip():
+        return {}
+
+    timeout_sec = float(getattr(config, "OPENROUTER_TIMEOUT_SEC", 30.0))
+    max_retries = int(getattr(config, "OPENROUTER_MAX_RETRIES", 2))
+    use_structured = _coerce_bool(
+        getattr(config, "OPENROUTER_USE_STRUCTURED_OUTPUT", True),
+        True,
+    )
+
+    headers = {
+        "Authorization": f"Bearer {api_key.strip()}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/video-stats-bot",
+        "X-Title": "Video Stats Bot - Hook Translator",
+    }
+
+    payload: dict[str, Any] = {
+        "model": DEFAULT_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Ты переводчик маркетинговых хуков для коротких видео. "
+                    "Переводи на русский язык точно по смыслу, без добавления советов."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Переведи каждый хук на русский и верни только JSON-объект формата: "
+                    '{"translations":[{"source":"...","translation":"..."}]}. '
+                    "Сохраняй source без изменений.\n\nHOOKS:\n"
+                    f"{json.dumps(hook_texts, ensure_ascii=False)}"
+                ),
+            },
+        ],
+        "max_tokens": 900,
+        "temperature": 0.1,
+        "reasoning": {"effort": "low"},
+    }
+    if use_structured:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "hook_translation_payload",
+                "strict": True,
+                "schema": _HOOK_TRANSLATION_SCHEMA,
+            },
+        }
+
+    result = _request_openrouter(payload, headers, timeout_sec, max_retries)
+    if not result:
+        return {}
+
+    response_text = _extract_message_text(result)
+    parsed = _parse_summary_payload(response_text)
+    if not isinstance(parsed, dict):
+        return {}
+
+    translations = parsed.get("translations")
+    if not isinstance(translations, list):
+        return {}
+
+    mapped: dict[str, str] = {}
+    for item in translations:
+        if not isinstance(item, dict):
+            continue
+        source = _normalize_hook_for_translation(str(item.get("source") or ""))
+        translation = str(item.get("translation") or "").strip()
+        if not source or not translation:
+            continue
+        mapped[source] = translation
+    return mapped
+
+
+def _translate_hook_texts(hook_texts: list[str]) -> dict[str, str]:
+    normalized = [_normalize_hook_for_translation(text) for text in hook_texts]
+    unique_inputs = [text for text in dict.fromkeys(normalized) if text]
+    if not unique_inputs:
+        return {}
+
+    to_translate = [text for text in unique_inputs if text not in _HOOK_TRANSLATION_CACHE]
+    translate_enabled = _coerce_bool(
+        getattr(config, "DAY_SUMMARY_TRANSLATE_TOP_HOOKS", True),
+        True,
+    )
+    if to_translate and translate_enabled:
+        translated = _request_hook_translations(to_translate)
+        for source, translation in translated.items():
+            if source and translation:
+                _HOOK_TRANSLATION_CACHE[source] = translation
+
+    return {
+        source: _HOOK_TRANSLATION_CACHE[source]
+        for source in unique_inputs
+        if source in _HOOK_TRANSLATION_CACHE
+    }
+
+
+def _ensure_top_hooks_russian_translation(top_hooks_list: list[str]) -> list[str]:
+    if not isinstance(top_hooks_list, list) or not top_hooks_list:
+        return top_hooks_list
+
+    prepared: list[dict[str, Any]] = []
+    sources: list[str] = []
+    for item in top_hooks_list:
+        line = str(item or "").strip()
+        if not line:
+            continue
+
+        hook_part, details_part = _split_hook_line(line)
+        normalized_source = _normalize_hook_for_translation(hook_part)
+        needs_translation = (
+            bool(normalized_source)
+            and _hook_needs_translation(normalized_source)
+            and not _hook_has_russian_translation(hook_part)
+        )
+        if needs_translation:
+            sources.append(normalized_source)
+
+        prepared.append(
+            {
+                "line": line,
+                "hook_part": hook_part,
+                "details_part": details_part,
+                "source": normalized_source,
+                "needs_translation": needs_translation,
+            }
+        )
+
+    translations = _translate_hook_texts(sources) if sources else {}
+    enriched: list[str] = []
+    for item in prepared:
+        if not item["needs_translation"]:
+            enriched.append(item["line"])
+            continue
+
+        source = item["source"]
+        translated = str(translations.get(source, "")).strip()
+        if not translated:
+            enriched.append(item["line"])
+            continue
+
+        if source.casefold() == translated.casefold():
+            enriched.append(item["line"])
+            continue
+
+        if item["details_part"]:
+            enriched.append(
+                f"{item['hook_part']} ({translated}) — {item['details_part']}"
+            )
+        else:
+            enriched.append(f"{item['hook_part']} ({translated})")
+    return enriched
+
 
 def _safe_float(value: Any) -> float | None:
     if value is None:
@@ -304,7 +529,7 @@ def _enhance_summary_payload(payload: dict[str, Any], evidence: dict[str, Any] |
                     top_hooks.append(hook_text)
         if not top_hooks:
             top_hooks = ["Недостаточно данных по хукам."]
-    enhanced["top_hooks_list"] = top_hooks
+    enhanced["top_hooks_list"] = _ensure_top_hooks_russian_translation(top_hooks)
 
     if not str(enhanced.get("patterns_analysis", "")).strip():
         enhanced["patterns_analysis"] = "Недостаточно данных для анализа паттернов."
@@ -734,9 +959,11 @@ ALL DAY VIDEOS:
    выводов. 2-3 предложения, живым языком.
 
 2. top_hooks_list — Перечисли до 3 лучших хуков. Для каждого напиши сам текст
-   хука и кратко поясни, почему он сильный (тема, retention, что зацепило).
-   Пример: "Estratégia de 3 etapas... — отличный retention 88%, тема отношений
-   всегда цепляет".
+   хука в оригинале и сразу в скобках перевод на русский, затем кратко поясни,
+   почему он сильный (тема, retention, что зацепило).
+   Формат обязателен: "Original hook (перевод на русский) — комментарий".
+   Пример: "Estratégia de 3 etapas... (Стратегия из 3 шагов...) — отличный
+   retention 88%, тема отношений всегда цепляет".
 
 3. patterns_analysis — Сделай вывод: что сработало и почему. Не пересказывай
    цифры — интерпретируй их. SHORT VS LONG — это про тип хука (короткий,
@@ -1147,6 +1374,7 @@ def _fallback_summary(evidence: dict[str, Any]) -> str:
             top_hooks_list.append(hook_text)
     if not top_hooks_list:
         top_hooks_list.append("Недостаточно данных по хукам.")
+    top_hooks_list = _ensure_top_hooks_russian_translation(top_hooks_list)
 
     short_info = short_vs_long.get("short") or {}
     long_info = short_vs_long.get("long") or {}

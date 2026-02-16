@@ -13,6 +13,7 @@ from src.ai.day_summary import (
     _build_hook_clusters,
     _build_summary_prompt,
     _cache,
+    _ensure_top_hooks_russian_translation,
     _parse_summary_response,
     _render_summary_payload,
     _validate_summary_payload,
@@ -190,6 +191,27 @@ class TestSummaryPayloadValidation:
         assert "&lt;58%" in rendered
         assert "&lt;strong&gt;alpha&lt;/strong&gt;" in rendered
         assert "<b>📊 Общая картина:</b>" in rendered
+
+    @patch("src.ai.day_summary._translate_hook_texts")
+    def test_top_hooks_include_translation_in_parentheses(self, mock_translate) -> None:
+        mock_translate.return_value = {"How to go viral in 7 days": "Как набрать вирусность за 7 дней"}
+
+        hooks = _ensure_top_hooks_russian_translation(
+            ["How to go viral in 7 days — retention 81%, strong curiosity angle"]
+        )
+
+        assert len(hooks) == 1
+        assert "(Как набрать вирусность за 7 дней)" in hooks[0]
+        assert "— retention 81%" in hooks[0]
+
+    @patch("src.ai.day_summary._translate_hook_texts")
+    def test_top_hooks_keep_existing_russian_translation(self, mock_translate) -> None:
+        hooks = _ensure_top_hooks_russian_translation(
+            ["How to go viral in 7 days (Как набрать вирусность за 7 дней) — retention 81%"]
+        )
+
+        assert hooks[0].count("(Как набрать вирусность за 7 дней)") == 1
+        mock_translate.assert_not_called()
 
 
 class TestGenerateDaySummary:

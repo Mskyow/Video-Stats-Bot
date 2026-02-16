@@ -113,6 +113,9 @@ ENABLE_DAY_SUMMARY: bool = _get_bool_optional("ENABLE_DAY_SUMMARY", True)
 DAY_SUMMARY_MODEL: str = "google/gemini-3-flash-preview"
 DAY_SUMMARY_MAX_TOKENS: int = max(100, _get_int_optional("DAY_SUMMARY_MAX_TOKENS", 1500))
 DAY_SUMMARY_TEMPERATURE: float = max(0.0, min(2.0, _get_float_optional("DAY_SUMMARY_TEMPERATURE", 0.7)))
+DAY_SUMMARY_TRANSLATE_TOP_HOOKS: bool = _get_bool_optional(
+    "DAY_SUMMARY_TRANSLATE_TOP_HOOKS", True
+)
 
 
 def setup_logging() -> None:
