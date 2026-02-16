@@ -84,6 +84,10 @@ GOOGLE_SHEET_ID: str | None = _get_optional("GOOGLE_SHEET_ID")
 # Название листа в таблице (например "Hooks CRM" или "Hook Analytics")
 GOOGLE_SHEET_WORKSHEET_NAME: str = _get_optional("GOOGLE_SHEET_WORKSHEET_NAME") or "Hooks CRM"
 REPORT_CHAT_ID: int | None = int(v) if (v := _get_optional("REPORT_CHAT_ID")) else None
+REPORT_TOPIC_ID: int | None = int(v) if (v := _get_optional("REPORT_TOPIC_ID")) else None
+REPORT_TIMEZONE: str = _get_optional("REPORT_TIMEZONE") or "Europe/Minsk"
+REPORT_HOUR: int = _get_int_optional("REPORT_HOUR", 15)
+REPORT_MINUTE: int = _get_int_optional("REPORT_MINUTE", 0)
 
 # Лимит одновременных запросов к AI
 MAX_CONCURRENT_ANALYSIS: int = max(1, _get_int_optional("MAX_CONCURRENT_ANALYSIS", 5))
