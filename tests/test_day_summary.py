@@ -146,52 +146,44 @@ class TestCompactDataset:
         rows = _build_compact_dataset(sample_videos)
         evidence = _build_evidence(rows)
         prompt = _build_summary_prompt(evidence)
-        assert "EVIDENCE OVERVIEW" in prompt
-        assert "EVIDENCE GROUP METRICS" in prompt
-        assert "COMPACT DATASET (ALL DAY VIDEOS)" in prompt
+        assert "OVERVIEW:" in prompt
+        assert "GROUP METRICS:" in prompt
+        assert "ALL DAY VIDEOS:" in prompt
         assert "Верни строго JSON-объект" in prompt
 
 
 class TestSummaryPayloadValidation:
-    def test_validate_payload_requires_numbers(self) -> None:
+    def test_validate_payload_rejects_missing_fields(self) -> None:
         payload = {
             "overview": "Общая картина без цифр",
             "best_hooks": ["Сработало хорошо"],
-            "worked_today": ["Есть паттерны"],
-            "best_cases": ["Есть кейс"],
-            "recommendations": ["Делай больше", "Тестируй еще"],
-            "evidence_refs": ["cluster"],
         }
         valid, errors = _validate_summary_payload(payload)
         assert not valid
-        assert any("numeric evidence" in err for err in errors)
+        assert any("overview_text" in err for err in errors)
 
     def test_parse_summary_response_json(self) -> None:
         raw = """
         {
-          "overview": "За сутки 4 видео, avg score 6.7/10.",
-          "best_hooks": ["Short hooks: retention 75% > 70%"],
-          "worked_today": ["Share rate 1.9% > 1.5%"],
-          "best_cases": ["Case A: score 8.7, retention 77%"],
-          "recommendations": ["Scale short hooks with share 1.9%.", "Rework long hooks below 58%."],
-          "evidence_refs": ["hook_type.short", "hook_type.long"]
+          "overview_text": "За сутки проанализировано 4 видео, средний скор 6.7/10.",
+          "top_hooks_list": ["3 способа заработать на AI — retention 77%, тема AI-заработка цепляет"],
+          "patterns_analysis": "Короткие ролики показали себя лучше длинных: средний скор 7.7 vs 3.8.",
+          "action_items": ["Попробуй снять ещё пару роликов с AI-хуком — он сегодня лучший."]
         }
         """
         parsed = _parse_summary_response(raw)
         assert parsed is not None
         assert "Общая картина" in parsed
         assert "Лучшие хуки" in parsed
-        assert "Лучшие кейсы за сегодня" in parsed
-        assert "Что делать сегодня" in parsed
+        assert "Что сработало" in parsed
+        assert "Next steps" in parsed
 
     def test_render_summary_escapes_untrusted_html(self) -> None:
         payload = {
-            "overview": "За сутки retention 3s <58% в 2 роликах.",
-            "best_hooks": ["Hook <strong>alpha</strong> дал 72%."],
-            "worked_today": ["Share rate >1.5% в 3 видео."],
-            "best_cases": ["Кейс: score 8.7 и retention <60%."],
-            "recommendations": ["Фикси группы с retention <58%.", "Тестируй 2 варианта."],
-            "evidence_refs": ["hook_type.short"],
+            "overview_text": "За сутки retention 3s <58% в 2 роликах.",
+            "top_hooks_list": ["Hook <strong>alpha</strong> дал 72%."],
+            "patterns_analysis": "Кейс: score 8.7 и retention <60%.",
+            "action_items": ["Фикси группы с retention <58%.", "Тестируй 2 варианта."],
         }
 
         rendered = _render_summary_payload(payload)
@@ -231,7 +223,7 @@ class TestGenerateDaySummary:
         summary = await generate_day_summary(sample_videos)
         assert summary is not None
         assert "Общая картина" in summary
-        assert "Что делать сегодня" in summary
+        assert "Next steps" in summary
 
     @pytest.mark.asyncio
     @patch("src.ai.day_summary._call_openrouter_for_summary")

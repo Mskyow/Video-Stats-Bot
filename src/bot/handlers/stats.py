@@ -159,7 +159,6 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
             ai_summary = await generate_day_summary(videos, min_videos=ai_summary_min_videos)
             if ai_summary:
                 ai_block = "\n\n━━━━━━━━━━━━━━━━━━━━━\n"
-                ai_block += "🤖 <b>AI АНАЛИЗ ДНЯ</b>\n\n"
                 ai_block += ai_summary
                 # Telegram hard-limit: 4096 chars per message.
                 # Keep some buffer for footer and avoid broken delivery.
@@ -167,9 +166,9 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
                     logger.warning("AI summary is too long for Telegram message; shrinking AI block.")
                     ai_block = (
                         "\n\n━━━━━━━━━━━━━━━━━━━━━\n"
-                        "🤖 <b>AI АНАЛИЗ ДНЯ</b>\n\n"
-                        "Summary сокращен из-за лимита Telegram сообщения.\n"
-                        "Сфокусируйся на топовых hook-кластерах и метриках из таблицы."
+                        "🤖 <b>AI-сводка дня</b>\n\n"
+                        "Сводка сокращена из-за лимита Telegram.\n"
+                        "Подробности — в Google таблице."
                     )
                 report_text += ai_block
             elif len(videos) < ai_summary_min_videos:
@@ -181,8 +180,8 @@ async def cmd_day_stats(message: Message, **kwargs) -> None:
                 )
                 report_text += (
                     "\n\n━━━━━━━━━━━━━━━━━━━━━\n"
-                    "🤖 <b>AI АНАЛИЗ ДНЯ</b>\n\n"
-                    "Недостаточно данных для AI-сводки за сутки.\n"
+                    "🤖 <b>AI-сводка дня</b>\n\n"
+                    "Пока недостаточно данных для AI-сводки.\n"
                     f"Сейчас: {len(videos)} видео, минимум: {ai_summary_min_videos} ({missing_videos_text})."
                 )
         except Exception as e:
