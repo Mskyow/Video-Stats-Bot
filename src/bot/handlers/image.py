@@ -393,6 +393,17 @@ async def process_single_video(
                     ),
                 )
 
+            # Ошибка авторизации OpenRouter (401) — неверный/просроченный API ключ
+            if result_json.get("error") == "api_auth_failed":
+                return VideoProcessingResult(
+                    index=index,
+                    success=False,
+                    error_message=(
+                        "⚠️ Ошибка доступа к AI (OpenRouter). "
+                        "Проверьте API ключ OPENROUTER_API_KEY в настройках бота."
+                    ),
+                )
+
             # Проверка на несоответствие контента (разные видео в скриншотах)
             if result_json.get("error") == "content_mismatch":
                 reason = result_json.get("reason", "Неизвестная причина")
@@ -505,6 +516,8 @@ def build_summary_report(results: list[VideoProcessingResult], saved: int, faile
             # Упрощаем текст ошибки для списка
             if "непарный" in error_msg.lower():
                 error_msg = "Непарный скриншот"
+            elif "openrouter" in error_msg.lower() or "api ключ" in error_msg.lower():
+                error_msg = "Ошибка API ключа OpenRouter"
             elif "не смог распознать" in error_msg.lower():
                 error_msg = "AI не распознал"
             elif "не совпадают" in error_msg.lower():

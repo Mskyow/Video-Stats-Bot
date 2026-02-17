@@ -695,6 +695,9 @@ def _request_openrouter(
                 text,
             )
             if attempt == max_retries - 1:
+                # 401 = неверный/просроченный API ключ — возвращаем спец-ответ для понятного сообщения пользователю
+                if status_code == 401:
+                    return {"error": "api_auth_failed", "reason": str(text)[:200]}
                 return None
             time.sleep(2 ** attempt)
         except Exception as exc:
@@ -1043,6 +1046,8 @@ def _run_ai_step(
     )
     if not result:
         return None, None
+    if isinstance(result, dict) and result.get("error") == "api_auth_failed":
+        return result, None
 
     raw_text = _extract_message_content_text(result)
     parsed = _parse_response(raw_text)
@@ -1173,6 +1178,8 @@ def analyze_screenshot(
         max_retries=max_retries,
         structured_output=structured_output,
     )
+    if isinstance(extracted_raw_result, dict) and extracted_raw_result.get("error") == "api_auth_failed":
+        return extracted_raw_result, extraction_raw_text or ""
     if not extracted_raw_result:
         QUALITY_DASHBOARD.record(extract_failures=1)
         elapsed = time.monotonic() - start_ts
