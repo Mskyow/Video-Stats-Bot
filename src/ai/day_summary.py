@@ -25,7 +25,7 @@ from src.ai.benchmarks import CAROUSEL_BENCHMARKS_CONTEXT, VIDEO_BENCHMARKS_CONT
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "google/gemini-3-flash-preview"
+DEFAULT_MODEL = "google/gemini-3-flash-preview"  # fallback if config not loaded
 
 # In-memory cache: key -> (rendered_summary_html, timestamp)
 _cache: dict[str, tuple[str, float]] = {}
@@ -195,8 +195,9 @@ def _request_hook_translations(hook_texts: list[str]) -> dict[str, str]:
         "X-Title": "Video Stats Bot - Hook Translator",
     }
 
+    day_model = getattr(config, "DAY_SUMMARY_MODEL", None) or DEFAULT_MODEL
     payload: dict[str, Any] = {
-        "model": DEFAULT_MODEL,
+        "model": day_model,
         "messages": [
             {
                 "role": "system",
@@ -1144,8 +1145,8 @@ def _call_openrouter_for_summary(
         logger.error("OPENROUTER_API_KEY not configured")
         return None
 
-    # Strict model policy for day summary.
-    model_name = DEFAULT_MODEL
+    # Model from config (DAY_SUMMARY_MODEL) or fallback.
+    model_name = model or getattr(config, "DAY_SUMMARY_MODEL", None) or DEFAULT_MODEL
     timeout_sec = float(getattr(config, "OPENROUTER_TIMEOUT_SEC", 30.0))
     max_retries = int(getattr(config, "OPENROUTER_MAX_RETRIES", 2))
     use_structured = bool(
@@ -1516,7 +1517,7 @@ async def generate_day_summary(
 
     max_tokens = int(getattr(config, "DAY_SUMMARY_MAX_TOKENS", 1500))
     temperature = float(getattr(config, "DAY_SUMMARY_TEMPERATURE", 0.7))
-    model_name = DEFAULT_MODEL
+    model_name = getattr(config, "DAY_SUMMARY_MODEL", None) or DEFAULT_MODEL
 
     cache_key = _build_cache_key(compact_rows, model_name, max_tokens, temperature)
     cached = _cache.get(cache_key)

@@ -108,13 +108,13 @@ TG_FILE_DOWNLOAD_TIMEOUT_SEC: float = max(
 # Задержка между записями в таблицу (секунды)
 SHEETS_WRITE_DELAY: float = 1.2
 
-# AI model policy (strict):
-# Always use Gemini 3 Flash via OpenRouter with reasoning.effort=medium.
-OPENROUTER_MODEL: str = "google/gemini-3-flash-preview"
+# AI model policy: Gemini 3 Flash по умолчанию. Можно переопределить через .env.
+# Для теста точности: OPENROUTER_MODEL=google/gemini-3.1-pro-preview
+OPENROUTER_MODEL: str = _get_optional("OPENROUTER_MODEL") or "google/gemini-3-flash-preview"
 
 # AI Day Summary настройки
 ENABLE_DAY_SUMMARY: bool = _get_bool_optional("ENABLE_DAY_SUMMARY", True)
-DAY_SUMMARY_MODEL: str = "google/gemini-3-flash-preview"
+DAY_SUMMARY_MODEL: str = _get_optional("DAY_SUMMARY_MODEL") or "google/gemini-3-flash-preview"
 DAY_SUMMARY_MAX_TOKENS: int = max(100, _get_int_optional("DAY_SUMMARY_MAX_TOKENS", 1500))
 DAY_SUMMARY_TEMPERATURE: float = max(0.0, min(2.0, _get_float_optional("DAY_SUMMARY_TEMPERATURE", 0.7)))
 DAY_SUMMARY_TRANSLATE_TOP_HOOKS: bool = _get_bool_optional(

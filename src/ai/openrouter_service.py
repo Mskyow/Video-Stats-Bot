@@ -27,7 +27,7 @@ from src.ai.benchmarks import BENCHMARKS_BY_CONTENT_TYPE, BENCHMARKS_CONTEXT
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "google/gemini-3-flash-preview"
+DEFAULT_MODEL = "google/gemini-3-flash-preview"  # fallback if config not loaded
 
 # Превращаем dict с бенчмарками в JSON-строку для контекста модели
 legacy_benchmarks_json = json.dumps(BENCHMARKS_CONTEXT, indent=2, ensure_ascii=False)
@@ -1122,8 +1122,8 @@ def analyze_screenshot(
         parsed_result: распарсенный JSON или None.
         raw_response_text: сырой текст ответа для дебага.
     """
-    # Strict model policy for all AI analysis calls.
-    model = DEFAULT_MODEL
+    # Model from config (OPENROUTER_MODEL) or fallback to DEFAULT_MODEL
+    model = getattr(config, "OPENROUTER_MODEL", None) or DEFAULT_MODEL
     logger.info("OpenRouter AI call: model=%s reasoning_effort=medium", model)
     api_key = getattr(config, "OPENROUTER_API_KEY", "")
     timeout_sec = float(getattr(config, "OPENROUTER_TIMEOUT_SEC", 120.0))
