@@ -191,6 +191,9 @@ EXTRACTION_USER_PROMPT = """Extract factual analytics fields from the provided s
 Input contains:
 1) Overview metrics screenshot
 2) Retention screenshot
+(Optional) 3) If you receive exactly 3 screenshots, the 3rd is the "retention after semantic ending" screen.
+
+If you receive exactly 3 screenshots, you must extract the 'retention after semantic ending' metric from the 3rd screenshot. Here is exactly where to find it and how it looks: Look under the black timeline, in the 'Retention Rate' section at the bottom left. You are looking for a value in the format 0:0X (Y%). For example, if you see 0:06 (10%), it means at the 6th second, the retention is 10%. If you see 0:07 (9%), it means at the 7th second, the retention is 9%. You must extract BOTH the second (the X value) and the percentage (the Y value).
 
 Rules:
 - Return ONLY one JSON object.
@@ -307,6 +310,8 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
                 "tiktok_churn_point": {"type": ["string", "null"]},
                 "mixed_media": {"type": ["boolean", "null"]},
                 "account_avg_views": {"type": ["number", "null"]},
+                "end_retention_second": {"type": ["integer", "null"]},
+                "end_retention_pct": {"type": ["number", "null"]},
             },
             "required": [
                 "views",
@@ -361,7 +366,14 @@ FINAL_ANALYSIS_SCHEMA: dict[str, Any] = {
         "hook_text": {"type": ["string", "null"]},
         "hook_type": {"type": ["string", "null"]},
         "video_duration_sec": {"type": ["number", "null"]},
-        "metrics": {"type": "object"},
+        "metrics": {
+            "type": "object",
+            "properties": {
+                "end_retention_second": {"type": ["integer", "null"]},
+                "end_retention_pct": {"type": ["number", "null"]},
+            },
+            "additionalProperties": True,
+        },
         "calculated_rates": {"type": "object"},
         "tier_1_analysis": {"type": "object"},
         "tier_2_analysis": {"type": "object"},
@@ -798,7 +810,7 @@ def _validate_analysis_result(result: dict[str, Any] | None) -> tuple[bool, list
             if value is not None and not _is_number(value):
                 errors.append(f"metrics.{key} must be numeric or null")
 
-        for key in ("retention_3s", "completion_rate", "avg_watch_time_pct", "viewed_pct"):
+        for key in ("retention_3s", "completion_rate", "avg_watch_time_pct", "viewed_pct", "end_retention_pct"):
             value = metrics.get(key)
             if value is None:
                 continue
@@ -806,7 +818,7 @@ def _validate_analysis_result(result: dict[str, Any] | None) -> tuple[bool, list
                 errors.append(f"metrics.{key} must be numeric or null")
             elif key == "avg_watch_time_pct" and float(value) < 0:
                 errors.append("metrics.avg_watch_time_pct must be >= 0")
-            elif key != "avg_watch_time_pct" and not (0 <= float(value) <= 100):
+            elif key not in ("avg_watch_time_pct",) and not (0 <= float(value) <= 100):
                 errors.append(f"metrics.{key} must be in range 0..100")
 
     return len(errors) == 0, errors
@@ -821,7 +833,7 @@ def _normalize_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
         value = _to_float(source.get(key))
         normalized[key] = int(round(value)) if value is not None and value >= 0 else 0
 
-    bounded_percent_metrics = ("retention_3s", "completion_rate", "viewed_pct")
+    bounded_percent_metrics = ("retention_3s", "completion_rate", "viewed_pct", "end_retention_pct")
     for key in bounded_percent_metrics:
         value = _to_float(source.get(key))
         normalized[key] = _clamp(value, 0.0, 100.0)
@@ -833,6 +845,8 @@ def _normalize_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
     normalized["total_photos"] = _to_float(source.get("total_photos"))
     normalized["mixed_media"] = _to_bool(source.get("mixed_media"))
     normalized["account_avg_views"] = _to_float(source.get("account_avg_views"))
+    end_sec = _to_float(source.get("end_retention_second"))
+    normalized["end_retention_second"] = int(round(end_sec)) if end_sec is not None and end_sec >= 0 else None
     churn_point = source.get("tiktok_churn_point")
     normalized["tiktok_churn_point"] = str(churn_point) if churn_point is not None else None
 

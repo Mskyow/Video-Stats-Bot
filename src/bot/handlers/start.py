@@ -7,14 +7,36 @@ import asyncio
 
 from aiogram import Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
 from src import config
-from src.db.repositories.users import get_or_create_user, is_user_authorized, authorize_user
+from src.db.repositories.users import (
+    get_or_create_user,
+    is_user_authorized,
+    authorize_user,
+    get_screenshots_mode,
+    set_screenshots_mode,
+)
 from src.db.repositories.videos import get_user_stats_summary
 from src.db.supabase_client import get_supabase
 
 router = Router(name="start")
+
+# Режим скриншотов: 2 или 3 на одно видео
+def _mode_keyboard(current: str) -> InlineKeyboardMarkup:
+    """Клавиатура переключения режима: 2 или 3 скриншота."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="📸 2 скриншота" + (" ✓" if current == "2" else ""),
+                callback_data="mode_2",
+            ),
+            InlineKeyboardButton(
+                text="📸 3 скриншота" + (" ✓" if current == "3" else ""),
+                callback_data="mode_3",
+            ),
+        ],
+    ])
 
 WELCOME_UNAUTHORIZED_TEXT = (
     "👋 <b>Привет!</b>\n\n"
@@ -31,6 +53,7 @@ START_TEXT = (
     "<b>Команды:</b>\n"
     "/upload — включить режим загрузки скриншотов\n"
     "/done — завершить загрузку скриншотов\n"
+    "/mode — переключить режим (2 или 3 скриншота на видео)\n"
     "/stats — посмотреть сводную статистику\n"
     "/day_stats — отчет за последние 24 часа\n"
     "/all_stats — общая статистика по всем видео\n"
@@ -68,14 +91,17 @@ async def cmd_start(message: Message) -> None:
 
     # Проверяем, авторизован ли уже пользователь
     if is_user_authorized(supabase, user.id):
-        await message.answer(START_TEXT)
+        mode = get_screenshots_mode(supabase, user.id)
+        await message.answer(START_TEXT, reply_markup=_mode_keyboard(mode))
         return
 
     # Проверяем кодовое слово
     if config.AUTH_SECRET and provided_code == config.AUTH_SECRET:
         if authorize_user(supabase, user.id):
+            mode = get_screenshots_mode(supabase, user.id)
             await message.answer(
-                "✅ <b>Доступ разрешён!</b>\n\n" + START_TEXT
+                "✅ <b>Доступ разрешён!</b>\n\n" + START_TEXT,
+                reply_markup=_mode_keyboard(mode),
             )
         else:
             await message.answer(
@@ -89,7 +115,8 @@ async def cmd_start(message: Message) -> None:
     else:
         # Если код не настроен — разрешаем доступ
         authorize_user(supabase, user.id)
-        await message.answer(START_TEXT)
+        mode = get_screenshots_mode(supabase, user.id)
+        await message.answer(START_TEXT, reply_markup=_mode_keyboard(mode))
 
 
 @router.message(Command("help"))
@@ -98,6 +125,51 @@ async def cmd_help(message: Message) -> None:
         [InlineKeyboardButton(text="📚 Бенчмарки и расчёт оценки", url="https://www.notion.so/3031199f0c2480c98ef3fbb036702cc4?source=copy_link")]
     ])
     await message.answer(HELP_TEXT, reply_markup=keyboard)
+
+
+@router.message(Command("mode"))
+async def cmd_mode(message: Message) -> None:
+    """Показать текущий режим скриншотов и кнопки переключения."""
+    user_id = message.from_user.id if message.from_user else 0
+    if not user_id:
+        await message.answer("Не удалось определить пользователя.")
+        return
+    supabase = get_supabase()
+    if not supabase:
+        await message.answer("БД недоступна.")
+        return
+    current = get_screenshots_mode(supabase, user_id)
+    label = "2 скриншота (Обзор + Удержание)" if current == "2" else "3 скриншота"
+    await message.answer(
+        f"📸 <b>Режим скриншотов</b>\n\nСейчас: <b>{label}</b>\n\nВыбери режим:",
+        reply_markup=_mode_keyboard(current),
+    )
+
+
+@router.callback_query(lambda c: c.data in ("mode_2", "mode_3"))
+async def cb_screenshots_mode(callback: CallbackQuery) -> None:
+    """Переключение режима 2/3 скриншота и подтверждение."""
+    user_id = callback.from_user.id if callback.from_user else 0
+    if not user_id:
+        await callback.answer("Ошибка: пользователь не определён.")
+        return
+    target = "3" if callback.data == "mode_3" else "2"
+    supabase = get_supabase()
+    if not supabase:
+        await callback.answer("БД недоступна.")
+        return
+    ok = set_screenshots_mode(supabase, user_id, target)
+    if not ok:
+        await callback.answer("Не удалось сохранить режим.")
+        return
+    label = "2 скриншота (Обзор + Удержание)" if target == "2" else "3 скриншота"
+    await callback.answer(f"Режим переключён на {label}")
+    # Обновляем только клавиатуру (сообщение может быть /start или /mode)
+    try:
+        if callback.message:
+            await callback.message.edit_reply_markup(reply_markup=_mode_keyboard(target))
+    except Exception:
+        pass
 
 
 # Оценка токенов и стоимости AI на один анализ ролика (2 вызова: extraction + scoring)

@@ -69,6 +69,7 @@ REPORT_COLUMNS = [
     "Watch Time",     # 16
     "ER",             # 17
     "AI Analysis",    # 18
+    "Retention After the Core",  # 19
 ]
 
 
@@ -522,6 +523,19 @@ def _build_row(video_data: dict[str, Any]) -> list[str]:
     # 18. AI Analysis
     analysis = _safe_get(video_data, "analysis", "-")
 
+    # 19. Retention After the Core (3-screenshot mode: 0:0X (Y%))
+    end_sec = metrics.get("end_retention_second")
+    end_pct = metrics.get("end_retention_pct")
+    if end_sec is not None and end_pct is not None:
+        try:
+            sec_int = int(end_sec)
+            pct_val = float(end_pct)
+            retention_after_core = f"0:{sec_int:02d} ({int(round(pct_val))}%)"
+        except (TypeError, ValueError):
+            retention_after_core = ""
+    else:
+        retention_after_core = ""
+
     return [
         processed_at,   # 1
         posted_at,      # 2
@@ -541,6 +555,7 @@ def _build_row(video_data: dict[str, Any]) -> list[str]:
         watch_time_str, # 16
         er_str,         # 17
         analysis,       # 18
+        retention_after_core,  # 19
     ]
 
 
@@ -608,6 +623,7 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
         16. Watch Time - время просмотра
         17. ER - Engagement Rate (дорасчет если нужно)
         18. AI Analysis - детальный анализ от AI
+        19. Retention After the Core - 0:0X (Y%) из 3-го скриншота или пусто
 
     Args:
         video_data: Словарь с данными видео.

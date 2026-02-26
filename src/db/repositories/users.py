@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from supabase import Client
@@ -180,3 +180,53 @@ def promote_user_to_approved(
     Повышает пользователя до статуса 'approved'.
     """
     return authorize_user(client, user_id)
+
+
+# Режим скриншотов: 2 (пара) или 3 скриншота на одно видео
+
+def get_screenshots_mode(
+    client: Client | None,
+    user_id: int,
+) -> Literal["2", "3"]:
+    """
+    Возвращает режим скриншотов пользователя: '2' (пара) или '3' (три скриншота).
+    По умолчанию '2', если пользователь не найден или БД недоступна.
+    """
+    if client is None:
+        logger.warning("Supabase client not initialized; defaulting screenshots_mode to 2")
+        return "2"
+
+    try:
+        resp = client.table("users").select("screenshots_mode").eq("id", user_id).execute()
+        if resp.data and len(resp.data) > 0:
+            mode = resp.data[0].get("screenshots_mode")
+            if mode in ("2", "3"):
+                return mode
+        return "2"
+    except Exception as e:
+        logger.exception("get_screenshots_mode failed: %s", e)
+        return "2"
+
+
+def set_screenshots_mode(
+    client: Client | None,
+    user_id: int,
+    mode: Literal["2", "3"],
+) -> bool:
+    """
+    Устанавливает режим скриншотов пользователя.
+    Возвращает True при успехе.
+    """
+    if client is None:
+        logger.warning("Supabase client not initialized; skip set_screenshots_mode")
+        return False
+
+    try:
+        resp = client.table("users").update({"screenshots_mode": mode}).eq("id", user_id).execute()
+        if resp.data and len(resp.data) > 0:
+            logger.info("User %s screenshots_mode set to %s", user_id, mode)
+            return True
+        return False
+    except Exception as e:
+        logger.exception("set_screenshots_mode failed: %s", e)
+        return False

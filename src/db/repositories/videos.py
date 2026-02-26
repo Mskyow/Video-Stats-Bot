@@ -284,6 +284,17 @@ def insert_video(
         # Это защищает insert от значений вроде "7.85".
         duration_int = int(round(duration_value)) if duration_value is not None else None
 
+        # 3-screenshot mode: store end retention as separate columns for analytics
+        end_sec_raw = metrics.get("end_retention_second")
+        end_pct_raw = _to_optional_float(metrics.get("end_retention_pct"))
+        end_retention_second_int = None
+        if end_sec_raw is not None:
+            try:
+                end_retention_second_int = int(round(float(end_sec_raw)))
+            except (TypeError, ValueError):
+                pass
+        end_retention_pct_num = end_pct_raw  # keep as float for NUMERIC column
+
         payload: dict[str, Any] = {
             "user_id": user_id,
             "platform": result.get("platform"),
@@ -297,6 +308,8 @@ def insert_video(
             "video_duration_sec": duration_int,
             "content_type": result.get("content_type", "video"),
             "hook_text": result.get("hook_text"),
+            "end_retention_second": end_retention_second_int,
+            "end_retention_pct": end_retention_pct_num,
         }
 
         if raw_ai_response:

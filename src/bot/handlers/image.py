@@ -20,6 +20,7 @@ from src.config import (
     MAX_CONCURRENT_ANALYSIS,
     TG_FILE_DOWNLOAD_TIMEOUT_SEC,
 )
+from src.db.repositories.users import get_screenshots_mode
 from src.db.repositories.videos import insert_video
 from src.db.supabase_client import get_supabase
 from src.services.sheets_service import queue_export
@@ -31,7 +32,7 @@ VIDEO_ANALYSIS_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_ANALYSIS)
 
 @dataclass
 class VideoProcessingResult:
-    """Результат обработки одного видео (пары скриншотов)."""
+    """Результат обработки одного видео (2 или 3 скриншота в зависимости от режима)."""
     index: int
     video_title: str | None = None
     success: bool = False
@@ -75,45 +76,60 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     
     Алгоритм:
     1. Сортируем сообщения альбома по ID.
-    2. Разбиваем на пары (Overview + Retention).
-    3. Запускаем параллельный анализ для всех пар.
+    2. Разбиваем на группы по 2 или 3 (режим пользователя): Overview + Retention [ + опционально 3-й ].
+    3. Запускаем параллельный анализ для всех групп.
     4. Сохраняем успешные результаты в БД/Google Sheets.
     5. Формируем единый сводный отчет.
     """
     # Если middleware не передал album, используем само сообщение как список из 1
     messages = album or [message]
     user_id = message.from_user.id if message.from_user else 0
-    
-    # 1. Сортировка и валидация
-    messages.sort(key=lambda m: m.message_id)
-    
-    pairs = []
-    orphans = []
-    
-    # Разбиваем на пары [A, B], [C, D]
-    for i in range(0, len(messages), 2):
-        if i + 1 < len(messages):
-            pairs.append((messages[i], messages[i+1]))
-        else:
-            orphans.append(messages[i])
-            
-    total_videos = len(pairs) + len(orphans)
-    if total_videos == 0:
+
+    # Режим: строго 2 или 3 скриншота на одно видео (берём из БД до любой обработки)
+    supabase = get_supabase()
+    chunk_size = get_screenshots_mode(supabase, user_id) if supabase and user_id else "2"
+    chunk_size = int(chunk_size)
+
+    # Строгая проверка: число фото должно быть кратно chunk_size
+    n = len(messages)
+    if n == 0:
         return
+    if n % chunk_size != 0:
+        if chunk_size == 2:
+            await message.answer(
+                "⚠️ <b>Режим «2 скриншота»</b>\n\n"
+                "Отправь чётное количество фото: по 2 скриншота на каждое видео (Обзор + Удержание).\n\n"
+                f"Сейчас отправлено: <b>{n}</b>. Добавь или убери одно фото, либо переключи режим: /mode"
+            )
+        else:
+            await message.answer(
+                "⚠️ <b>Режим «3 скриншота»</b>\n\n"
+                "Отправь количество фото, кратное 3: по 3 скриншота на каждое видео.\n\n"
+                f"Сейчас отправлено: <b>{n}</b>. Добавь или убери фото, либо переключи режим: /mode"
+            )
+        return
+
+    # 1. Сортировка и строгое разбиение на группы по chunk_size (только полные группы)
+    messages.sort(key=lambda m: m.message_id)
+    groups: list[list[Message]] = [
+        list(messages[i : i + chunk_size])
+        for i in range(0, len(messages), chunk_size)
+    ]
+    total_videos = len(groups)
 
     batch_id = f"{user_id or 'unknown'}:{message.message_id}"
     logger.info(
-        "Start batch processing id=%s user_id=%s pairs=%s orphans=%s",
+        "Start batch processing id=%s user_id=%s chunk=%s groups=%s",
         batch_id,
         user_id,
-        len(pairs),
-        len(orphans),
+        chunk_size,
+        len(groups),
     )
 
     # Отправляем сообщение о начале обработки
     processing_msg = await message.answer(
         f"⏳ <b>Начинаю обработку...</b>\n"
-        f"Видео в очереди: {len(pairs)}\n"
+        f"Видео в очереди: {len(groups)} (режим: {chunk_size} скриншота)\n"
         f"Одновременно обрабатываю: до {MAX_CONCURRENT_ANALYSIS}\n"
         f"⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️ 0%"
     )
@@ -122,7 +138,7 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     tasks = []
     
     # Создаем shared counter для прогресса
-    progress_counter = {"processed": 0, "total": len(pairs)}
+    progress_counter = {"processed": 0, "total": len(groups)}
     
     async def update_progress():
         progress_counter["processed"] += 1
@@ -144,41 +160,22 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
         except Exception:
             pass
 
-    for idx, (msg1, msg2) in enumerate(pairs, start=1):
-        # Оборачиваем process_single_video для обновления прогресса
-        async def task_wrapper(i, m1, m2, b):
-            res = await process_single_video(i, m1, m2, b, batch_id=batch_id)
+    for idx, group in enumerate(groups, start=1):
+        async def task_wrapper(i, msgs, b):
+            res = await process_single_video(i, msgs, b, batch_id=batch_id)
             await update_progress()
             return res
-            
-        tasks.append(task_wrapper(idx, msg1, msg2, bot))
+        tasks.append(task_wrapper(idx, group, bot))
 
-    # Добавляем "орфанные" (непарные) как ошибки
     results: list[VideoProcessingResult] = []
-    
-    # Запускаем задачи
     if tasks:
         processed_results = await asyncio.gather(*tasks, return_exceptions=True)
-        
         for res in processed_results:
             if isinstance(res, VideoProcessingResult):
                 results.append(res)
             elif isinstance(res, Exception):
-                # Критическая ошибка в таске (не должна случаться, т.к. внутри catch-all)
                 logger.error("Critical error in worker task batch_id=%s: %s", batch_id, res)
-                # Добавляем заглушку ошибки
                 results.append(VideoProcessingResult(index=0, success=False, error_message=str(res)))
-
-    # Обработка непарных (skipped)
-    for i, orphan_msg in enumerate(orphans):
-        # Индекс продолжаем после пар
-        idx = len(pairs) + 1 + i
-        results.append(VideoProcessingResult(
-            index=idx,
-            success=False,
-            is_orphan=True,
-            error_message="⚠️ Непарный скриншот (нужна пара: Обзор + Удержание)."
-        ))
 
     results.sort(key=lambda r: r.index)
 
@@ -315,27 +312,24 @@ async def cb_exit_upload_mode(callback: CallbackQuery, state: FSMContext):
 
 async def process_single_video(
     index: int,
-    msg1: Message,
-    msg2: Message,
+    messages: list[Message],
     bot: Bot,
     batch_id: str | None = None,
 ) -> VideoProcessingResult:
     """
-    Скачивает два фото, отправляет в AI, возвращает результат.
-    Не падает при ошибках (Fault Tolerance).
+    Обрабатывает одно видео: принимает динамический список сообщений (2 или 3 фото),
+    скачивает их параллельно, передаёт в AI-анализатор. Не падает при ошибках (Fault Tolerance).
     """
     try:
         async with VIDEO_ANALYSIS_SEMAPHORE:
             logger.debug(
-                "Processing video batch_id=%s index=%s message_ids=(%s,%s)",
+                "Processing video batch_id=%s index=%s message_ids=%s",
                 batch_id,
                 index,
-                msg1.message_id,
-                msg2.message_id,
+                [m.message_id for m in messages],
             )
-            # Скачиваем фото параллельно
-            # Берем photo[-1] (наилучшее качество)
-            photos = [msg1.photo[-1], msg2.photo[-1]]  # type: ignore
+            # Берём наилучшее качество (photo[-1]); скачиваем все файлы группы параллельно
+            photos = [m.photo[-1] for m in messages]  # type: ignore[index]
 
             async def download(file_id: str) -> bytes:
                 """Скачивает один файл из Telegram с жесткими тайм-аутами."""
@@ -370,11 +364,8 @@ async def process_single_video(
                     # Сетевой сбой Telegram
                     raise
 
-            # Параллельная загрузка двух файлов
-            images_bytes = await asyncio.gather(
-                download(photos[0].file_id),
-                download(photos[1].file_id)
-            )
+            # Конкурентная загрузка всех фото группы (2 или 3)
+            images_bytes = await asyncio.gather(*[download(p.file_id) for p in photos])
 
             # AI Анализ (в треде, т.к. requests синхронный)
             result_json, raw_response = await asyncio.to_thread(
@@ -389,7 +380,7 @@ async def process_single_video(
                     success=False,
                     error_message=(
                         "⚠️ AI не смог распознать метрики. "
-                        "Проверь, что на скриншотах четко видны цифры, и отправь пару повторно."
+                        "Проверь, что на скриншотах четко видны цифры, и отправь скриншоты повторно."
                     ),
                 )
 

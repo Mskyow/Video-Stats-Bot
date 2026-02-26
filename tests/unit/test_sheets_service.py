@@ -46,6 +46,7 @@ from src.services.sheets_service import (
     _get_worksheet,
     export_video_to_sheet,
     queue_export,
+    REPORT_COLUMNS,
 )
 
 
@@ -251,6 +252,45 @@ class TestRowDataMapping:
         assert age is not None
         assert age >= 0
 
+    def test_retention_after_core_formatted_when_both_present(self):
+        """Retention After the Core: format 0:0X (Y%) when both values present (3-screenshot mode)."""
+        row = _build_row(
+            {
+                "content_type": "video",
+                "metrics": {
+                    "views": 100,
+                    "end_retention_second": 6,
+                    "end_retention_pct": 10,
+                },
+            }
+        )
+        assert len(row) == len(REPORT_COLUMNS)
+        assert row[-1] == "0:06 (10%)"
+
+    def test_retention_after_core_double_digit_second(self):
+        """Retention After the Core: second 12 formats as 0:12."""
+        row = _build_row(
+            {
+                "content_type": "video",
+                "metrics": {
+                    "views": 100,
+                    "end_retention_second": 12,
+                    "end_retention_pct": 9,
+                },
+            }
+        )
+        assert row[-1] == "0:12 (9%)"
+
+    def test_retention_after_core_empty_when_null(self):
+        """Retention After the Core: empty string when 2-screenshot mode or values null."""
+        row = _build_row(
+            {
+                "content_type": "video",
+                "metrics": {"views": 100},
+            }
+        )
+        assert row[-1] == ""
+
 
 class TestSyncExportToSheet:
     """Tests for synchronous export to Google Sheets."""
@@ -272,7 +312,7 @@ class TestSyncExportToSheet:
 
         # Verify row structure
         call_args = mock_worksheet.append_row.call_args[0][0]
-        assert len(call_args) == 18  # Columns A-R
+        assert len(call_args) == 19  # Columns A-S (incl. Retention After the Core)
 
     @patch("src.services.sheets_service._get_client")
     @patch("src.services.sheets_service._get_worksheet")
@@ -310,7 +350,7 @@ class TestSyncExportToSheet:
 
         assert result is True
         call_args = mock_worksheet.append_row.call_args[0][0]
-        assert len(call_args) == 18
+        assert len(call_args) == 19
         # Check defaults for missing fields
         assert call_args[2] == "video"  # Default content type
         assert call_args[9] == "100"  # Views
@@ -372,8 +412,8 @@ class TestSyncExportToSheet:
 class TestRowStructure:
     """Tests for row structure validation."""
 
-    def test_row_has_18_columns(self, sample_ai_response_video):
-        """Row should have exactly 18 columns (A-R)."""
+    def test_row_has_19_columns(self, sample_ai_response_video):
+        """Row should have exactly 19 columns (A-S, incl. Retention After the Core)."""
         with patch("src.services.sheets_service._get_client") as mock_get_client:
             with patch("src.services.sheets_service._get_worksheet") as mock_get_worksheet:
                 mock_worksheet = Mock()
@@ -385,7 +425,7 @@ class TestRowStructure:
                         export_video_to_sheet(sample_ai_response_video)
 
                 call_args = mock_worksheet.append_row.call_args[0][0]
-                assert len(call_args) == 18
+                assert len(call_args) == 19
 
     def test_column_a_processed_at(self, sample_ai_response_video):
         """Column A should be processed timestamp."""
