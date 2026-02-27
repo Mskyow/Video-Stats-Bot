@@ -53,7 +53,6 @@ START_TEXT = (
     "<b>Команды:</b>\n"
     "/upload — включить режим загрузки скриншотов\n"
     "/done — завершить загрузку скриншотов\n"
-    "/mode — переключить режим (2 или 3 скриншота на видео)\n"
     "/stats — посмотреть сводную статистику\n"
     "/day_stats — отчет за последние 24 часа\n"
     "/all_stats — общая статистика по всем видео\n"
@@ -91,17 +90,14 @@ async def cmd_start(message: Message) -> None:
 
     # Проверяем, авторизован ли уже пользователь
     if is_user_authorized(supabase, user.id):
-        mode = get_screenshots_mode(supabase, user.id)
-        await message.answer(START_TEXT, reply_markup=screenshots_mode_keyboard(mode))
+        await message.answer(START_TEXT)
         return
 
     # Проверяем кодовое слово
     if config.AUTH_SECRET and provided_code == config.AUTH_SECRET:
         if authorize_user(supabase, user.id):
-            mode = get_screenshots_mode(supabase, user.id)
             await message.answer(
                 "✅ <b>Доступ разрешён!</b>\n\n" + START_TEXT,
-                reply_markup=screenshots_mode_keyboard(mode),
             )
         else:
             await message.answer(
@@ -115,8 +111,7 @@ async def cmd_start(message: Message) -> None:
     else:
         # Если код не настроен — разрешаем доступ
         authorize_user(supabase, user.id)
-        mode = get_screenshots_mode(supabase, user.id)
-        await message.answer(START_TEXT, reply_markup=screenshots_mode_keyboard(mode))
+        await message.answer(START_TEXT)
 
 
 @router.message(Command("help"))
