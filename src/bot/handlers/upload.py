@@ -9,8 +9,9 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
+from src.bot.handlers.start import screenshots_mode_keyboard
 from src.bot.states import UploadMode
-from src.db.repositories.users import is_user_authorized
+from src.db.repositories.users import get_screenshots_mode, is_user_authorized
 from src.db.supabase_client import get_supabase
 
 router = Router(name="upload")
@@ -69,13 +70,15 @@ async def cmd_upload(message: Message, state: FSMContext) -> None:
 
     # Проверяем, не активен ли уже режим
     current_state = await state.get_state()
+    current_mode = get_screenshots_mode(supabase, user.id) if supabase else "2"
+    keyboard = screenshots_mode_keyboard(current_mode)
     if current_state == UploadMode.active:
-        await message.answer(ALREADY_ACTIVE_TEXT)
+        await message.answer(ALREADY_ACTIVE_TEXT, reply_markup=keyboard)
         return
 
     # Активируем режим загрузки
     await state.set_state(UploadMode.active)
-    await message.answer(UPLOAD_MODE_TEXT)
+    await message.answer(UPLOAD_MODE_TEXT, reply_markup=keyboard)
 
 
 @router.message(Command("done"))

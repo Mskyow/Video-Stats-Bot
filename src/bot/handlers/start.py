@@ -22,8 +22,8 @@ from src.db.supabase_client import get_supabase
 
 router = Router(name="start")
 
-# Режим скриншотов: 2 или 3 на одно видео
-def _mode_keyboard(current: str) -> InlineKeyboardMarkup:
+# Режим скриншотов: 2 или 3 на одно видео (используется в start и upload)
+def screenshots_mode_keyboard(current: str) -> InlineKeyboardMarkup:
     """Клавиатура переключения режима: 2 или 3 скриншота."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -92,7 +92,7 @@ async def cmd_start(message: Message) -> None:
     # Проверяем, авторизован ли уже пользователь
     if is_user_authorized(supabase, user.id):
         mode = get_screenshots_mode(supabase, user.id)
-        await message.answer(START_TEXT, reply_markup=_mode_keyboard(mode))
+        await message.answer(START_TEXT, reply_markup=screenshots_mode_keyboard(mode))
         return
 
     # Проверяем кодовое слово
@@ -101,7 +101,7 @@ async def cmd_start(message: Message) -> None:
             mode = get_screenshots_mode(supabase, user.id)
             await message.answer(
                 "✅ <b>Доступ разрешён!</b>\n\n" + START_TEXT,
-                reply_markup=_mode_keyboard(mode),
+                reply_markup=screenshots_mode_keyboard(mode),
             )
         else:
             await message.answer(
@@ -116,7 +116,7 @@ async def cmd_start(message: Message) -> None:
         # Если код не настроен — разрешаем доступ
         authorize_user(supabase, user.id)
         mode = get_screenshots_mode(supabase, user.id)
-        await message.answer(START_TEXT, reply_markup=_mode_keyboard(mode))
+        await message.answer(START_TEXT, reply_markup=screenshots_mode_keyboard(mode))
 
 
 @router.message(Command("help"))
@@ -142,7 +142,7 @@ async def cmd_mode(message: Message) -> None:
     label = "2 скриншота (Обзор + Удержание)" if current == "2" else "3 скриншота"
     await message.answer(
         f"📸 <b>Режим скриншотов</b>\n\nСейчас: <b>{label}</b>\n\nВыбери режим:",
-        reply_markup=_mode_keyboard(current),
+        reply_markup=screenshots_mode_keyboard(current),
     )
 
 
@@ -167,7 +167,7 @@ async def cb_screenshots_mode(callback: CallbackQuery) -> None:
     # Обновляем только клавиатуру (сообщение может быть /start или /mode)
     try:
         if callback.message:
-            await callback.message.edit_reply_markup(reply_markup=_mode_keyboard(target))
+            await callback.message.edit_reply_markup(reply_markup=screenshots_mode_keyboard(target))
     except Exception:
         pass
 
