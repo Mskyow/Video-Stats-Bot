@@ -22,6 +22,20 @@ from src.db.supabase_client import get_supabase
 
 router = Router(name="start")
 
+
+def main_actions_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📸 Как загрузить скрины", callback_data="help_screens"),
+                InlineKeyboardButton(text="📄 Как импортировать CSV", callback_data="help_csv"),
+            ],
+            [
+                InlineKeyboardButton(text="⚙️ Режим 2/3 скрина", callback_data="help_mode"),
+            ],
+        ]
+    )
+
 # Режим скриншотов: 2 или 3 на одно видео (используется в start и upload)
 def screenshots_mode_keyboard(current: str) -> InlineKeyboardMarkup:
     """Клавиатура переключения режима: 2 или 3 скриншота."""
@@ -40,36 +54,62 @@ def screenshots_mode_keyboard(current: str) -> InlineKeyboardMarkup:
 
 WELCOME_UNAUTHORIZED_TEXT = (
     "👋 <b>Привет!</b>\n\n"
-    "🤖 Я — <b>Creator Copilot</b>. С помощью искусственного интеллекта я анализирую скриншоты со статистикой твоих видео — <b>TikTok</b> и <b>Instagram Reels</b>.\n\n"
-    "🔐 Для доступа введи команду:\n"
+    "Я помогаю вести две вещи:\n"
+    "• разбор роликов по скринам\n"
+    "• обновление маркетинговой воронки по CSV\n\n"
+    "🔐 Для доступа введи:\n"
     "<code>/start КОДОВОЕ_СЛОВО</code>\n\n"
     "Кодовое слово узнай у администратора."
 )
 
 START_TEXT = (
-    "👋 <b>Привет! Я — Creator Copilot.</b>\n\n"
-    "С помощью искусственного интеллекта я анализирую скриншоты со статистикой твоих видео (TikTok, Instagram Reels).\n\n"
-    "Я автоматически извлекаю все важные метрики, добавляю их в базу данных и Google Sheets, чтобы ты мог видеть полную картину своего контента.\n\n"
-    "<b>Команды:</b>\n"
-    "/upload — включить режим загрузки скриншотов\n"
-    "/done — завершить загрузку скриншотов\n"
-    "/stats — посмотреть сводную статистику\n"
-    "/day_stats — отчет за последние 24 часа\n"
-    "/all_stats — общая статистика по всем видео\n"
-    "/help — инструкция по использованию"
+    "👋 <b>Creator Copilot</b>\n\n"
+    "<b>Что делает бот:</b>\n"
+    "• <b>Скрины роликов</b> -> лист <b>Video Analysis</b>\n"
+    "• <b>CSV воронки</b> -> лист <b>Marketing Funnels</b>\n\n"
+    "<b>Быстрый старт:</b>\n"
+    "1. Для скринов: <code>/upload</code>\n"
+    "2. Для CSV: <code>/import_csv</code>\n"
+    "3. Выйти из режима скринов: <code>/done</code>\n\n"
+    "<b>Остальные команды:</b>\n"
+    "/stats, /day_stats, /all_stats, /help"
 )
 
 HELP_TEXT = (
-    "<b>🚀 Как пользоваться ботом?</b>\n\n"
-    "Всё очень просто:\n\n"
-    "1️⃣ <b>Нажми /upload</b>\n"
-    "Бот перейдет в режим ожидания скриншотов.\n\n"
-    "2️⃣ <b>Отправь скриншоты статистики</b>\n"
-    "Просто скинь скриншоты метрик из TikTok или Instagram. Я сам распознаю, где какая платформа и какие цифры важны.\n\n"
-    "3️⃣ <b>Готово!</b>\n"
-    "Я обработаю данные, оценю видео по 10-балльной шкале, дам рекомендации и сохраню всё в таблицу.\n\n"
-    "Когда закончишь загружать — нажми /done, чтобы выйти из режима загрузки.\n\n"
+    "<b>Как пользоваться ботом</b>\n\n"
+    "<b>Скрины роликов</b>\n"
+    "1. <code>/upload</code>\n"
+    "2. Отправь скрины статистики\n"
+    "3. <code>/done</code>\n"
+    "Результат: запись в <b>Video Analysis</b> и обновление viral views в <b>Marketing Funnels</b>.\n\n"
+    "<b>CSV для воронки</b>\n"
+    "1. <code>/import_csv</code>\n"
+    "2. Отправь CSV в личку боту\n"
+    "Результат: upsert строк в <b>Marketing Funnels</b> по ключу Date + Channel + Store.\n\n"
     "👇 <b>Полезные материалы:</b>"
+)
+
+SCREENSHOTS_HELP_TEXT = (
+    "📸 <b>Скрины роликов</b>\n\n"
+    "1. Нажми <code>/upload</code>\n"
+    "2. Отправляй скрины статистики роликов\n"
+    "3. Когда закончил — <code>/done</code>\n\n"
+    "Лист: <b>Video Analysis</b>"
+)
+
+CSV_QUICK_HELP_TEXT = (
+    "📄 <b>CSV для воронки</b>\n\n"
+    "1. Нажми <code>/import_csv</code>\n"
+    "2. Отправь CSV-файл в личку боту\n\n"
+    "Лист: <b>Marketing Funnels</b>\n"
+    "Ключ обновления: <code>Date + Channel + Store</code>"
+)
+
+MODE_HELP_TEXT = (
+    "⚙️ <b>Режим скринов</b>\n\n"
+    "<b>2 скрина</b> — Overview + Retention\n"
+    "<b>3 скрина</b> — если нужен ещё retention-after-core\n\n"
+    "Сменить режим: <code>/mode</code>"
 )
 
 
@@ -90,7 +130,7 @@ async def cmd_start(message: Message) -> None:
 
     # Проверяем, авторизован ли уже пользователь
     if is_user_authorized(supabase, user.id):
-        await message.answer(START_TEXT)
+        await message.answer(START_TEXT, reply_markup=main_actions_keyboard())
         return
 
     # Проверяем кодовое слово
@@ -98,6 +138,7 @@ async def cmd_start(message: Message) -> None:
         if authorize_user(supabase, user.id):
             await message.answer(
                 "✅ <b>Доступ разрешён!</b>\n\n" + START_TEXT,
+                reply_markup=main_actions_keyboard(),
             )
         else:
             await message.answer(
@@ -111,15 +152,36 @@ async def cmd_start(message: Message) -> None:
     else:
         # Если код не настроен — разрешаем доступ
         authorize_user(supabase, user.id)
-        await message.answer(START_TEXT)
+        await message.answer(START_TEXT, reply_markup=main_actions_keyboard())
 
 
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📚 Бенчмарки и расчёт оценки", url="https://www.notion.so/3031199f0c2480c98ef3fbb036702cc4?source=copy_link")]
+        [
+            InlineKeyboardButton(text="📸 Скрины", callback_data="help_screens"),
+            InlineKeyboardButton(text="📄 CSV", callback_data="help_csv"),
+        ],
+        [
+            InlineKeyboardButton(text="⚙️ Режим 2/3", callback_data="help_mode"),
+        ],
+        [
+            InlineKeyboardButton(text="📚 Бенчмарки и оценка", url="https://www.notion.so/3031199f0c2480c98ef3fbb036702cc4?source=copy_link")
+        ]
     ])
     await message.answer(HELP_TEXT, reply_markup=keyboard)
+
+
+@router.callback_query(lambda c: c.data in ("help_screens", "help_csv", "help_mode"))
+async def cb_quick_help(callback: CallbackQuery) -> None:
+    if callback.data == "help_screens":
+        text = SCREENSHOTS_HELP_TEXT
+    elif callback.data == "help_csv":
+        text = CSV_QUICK_HELP_TEXT
+    else:
+        text = MODE_HELP_TEXT
+    await callback.message.answer(text)
+    await callback.answer()
 
 
 @router.message(Command("mode"))

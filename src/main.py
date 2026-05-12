@@ -12,7 +12,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
 
 from src import config
-from src.bot.handlers import image_router, start_router, stats_router, upload_router
+from src.bot.handlers import csv_router, image_router, start_router, stats_router, upload_router
 from src.bot.middlewares.album import AlbumMiddleware
 from src.bot.middlewares.auth import AuthMiddleware
 from src.db.supabase_client import get_client
@@ -34,23 +34,24 @@ def _setup_dispatch(dp: Dispatcher, bot: Bot) -> None:
     # Собираем альбомы
     root.message.middleware(AlbumMiddleware(latency=0.6))
 
-    # Важно: upload_router должен быть ПЕРЕД image_router,
-    # чтобы команды /upload и /done обрабатывались первыми
-    root.include_routers(upload_router, start_router, image_router, stats_router)
+    # csv_router идёт раньше upload_router, чтобы CSV не попадал в generic non-photo flow.
+    # upload_router должен быть перед image_router, чтобы /upload и /done обрабатывались первыми.
+    root.include_routers(csv_router, upload_router, start_router, image_router, stats_router)
     dp.include_router(root)
 
 
 async def setup_bot_commands(bot: Bot) -> None:
     """Настройка меню команд бота."""
     commands = [
-        BotCommand(command="start", description="Запуск бота"),
-        BotCommand(command="upload", description="Загрузить статистику видео"),
-        BotCommand(command="done", description="Завершить загрузку"),
-        BotCommand(command="help", description="Справка по использованию"),
-        BotCommand(command="stats", description="Моя статистика анализов"),
-        BotCommand(command="day_stats", description="Отчет за последние 24 часа"),
-        BotCommand(command="all_stats", description="Общая статистика по всем видео"),
-        BotCommand(command="send_report", description="Отправить отчёт в рабочий чат"),
+        BotCommand(command="start", description="Главное меню"),
+        BotCommand(command="upload", description="Загрузить скрины роликов"),
+        BotCommand(command="import_csv", description="Импортировать CSV воронки"),
+        BotCommand(command="done", description="Выключить режим скринов"),
+        BotCommand(command="help", description="Как пользоваться ботом"),
+        BotCommand(command="stats", description="Моя статистика"),
+        BotCommand(command="day_stats", description="Отчёт за 24 часа"),
+        BotCommand(command="all_stats", description="Общая статистика"),
+        BotCommand(command="send_report", description="Отправить отчёт в чат"),
     ]
 
     try:

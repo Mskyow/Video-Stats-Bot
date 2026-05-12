@@ -167,3 +167,25 @@ COMMENT ON COLUMN videos.metrics IS 'JSON: views, likes, shares, saves, comments
 COMMENT ON COLUMN videos.title IS 'Название видео, распознанное AI через OCR';
 COMMENT ON COLUMN videos.content_type IS 'Тип контента: video (видео) или carousel (карусель)';
 COMMENT ON COLUMN videos.hook_text IS 'Текст, распознанный на обложке видео через OCR';
+
+-- ============================================================
+-- 7. RUNTIME COLUMNS ADDED AFTER INITIAL AGGREGATE SCRIPT
+-- ============================================================
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS screenshots_mode TEXT NOT NULL DEFAULT '2';
+
+DO $$ BEGIN
+    ALTER TABLE users ADD CONSTRAINT chk_users_screenshots_mode
+        CHECK (screenshots_mode IN ('2', '3'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+ALTER TABLE videos
+ADD COLUMN IF NOT EXISTS end_retention_second INTEGER;
+
+ALTER TABLE videos
+ADD COLUMN IF NOT EXISTS end_retention_pct NUMERIC;
+
+COMMENT ON COLUMN users.screenshots_mode IS '2 = пара скриншотов на видео (Overview + Retention), 3 = три скриншота на видео';
+COMMENT ON COLUMN videos.end_retention_second IS 'Second at retention-after-core (3rd screenshot); integer, e.g. 6 for 0:06';
+COMMENT ON COLUMN videos.end_retention_pct IS 'Retention percentage at that second (0-100); from 3rd screenshot Retention Rate';

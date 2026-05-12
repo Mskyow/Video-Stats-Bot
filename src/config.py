@@ -108,6 +108,18 @@ TG_FILE_DOWNLOAD_TIMEOUT_SEC: float = max(
 # Задержка между записями в таблицу (секунды)
 SHEETS_WRITE_DELAY: float = 1.2
 
+# Временные коэффициенты для оценки search impressions из viral views.
+# Используются только пока по social-виралу нет фактических CSV из сторов.
+TIKTOK_SEARCH_IMPRESSIONS_RATE: float = max(
+    0.0, _get_float_optional("TIKTOK_SEARCH_IMPRESSIONS_RATE", 0.008)
+)
+YOUTUBE_SEARCH_IMPRESSIONS_RATE: float = max(
+    0.0, _get_float_optional("YOUTUBE_SEARCH_IMPRESSIONS_RATE", 0.005)
+)
+INSTAGRAM_SEARCH_IMPRESSIONS_RATE: float = max(
+    0.0, _get_float_optional("INSTAGRAM_SEARCH_IMPRESSIONS_RATE", 0.004)
+)
+
 # AI model policy: Gemini 3 Flash по умолчанию. Можно переопределить через .env.
 # Для теста точности: OPENROUTER_MODEL=google/gemini-3.1-pro-preview
 OPENROUTER_MODEL: str = _get_optional("OPENROUTER_MODEL") or "google/gemini-3-flash-preview"

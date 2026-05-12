@@ -3,6 +3,9 @@
 .venv
 credentials.json
 credentials-gsheet.json
+credentials-gsheet.oneline.txt
+*-gsheet*.json
+*-google-sheets*.json
 venv
 __pycache__
 *.pyc

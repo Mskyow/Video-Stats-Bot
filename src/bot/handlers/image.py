@@ -281,9 +281,9 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     
     if GOOGLE_SHEET_ID:
         url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}"
-        buttons.append(InlineKeyboardButton(text="📊 Google Sheet", url=url))
+        buttons.append(InlineKeyboardButton(text="📊 Открыть таблицу", url=url))
         
-    buttons.append(InlineKeyboardButton(text="🚪 Выйти из режима загрузки", callback_data="exit_upload_mode"))
+    buttons.append(InlineKeyboardButton(text="✅ Закрыть режим скринов", callback_data="exit_upload_mode"))
     # Располагаем кнопки вертикально
     for btn in buttons:
         keyboard.inline_keyboard.append([btn])
@@ -304,10 +304,10 @@ async def cb_exit_upload_mode(callback: CallbackQuery, state: FSMContext):
     """Выход из режима загрузки по кнопке."""
     await state.clear()
     await callback.message.edit_text(
-        "✅ Режим загрузки завершён.\nДля новой загрузки используй /upload",
+        "✅ Режим скринов выключен.\nДля новой загрузки используй /upload",
         reply_markup=None
     )
-    await callback.answer("Режим загрузки отключен")
+    await callback.answer("Режим скринов выключен")
 
 
 async def process_single_video(
