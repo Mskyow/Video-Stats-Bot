@@ -1,5 +1,5 @@
 """
-Команды /start, /help и /stats.
+Commands /start, /help, /mode and /stats.
 """
 from __future__ import annotations
 
@@ -7,14 +7,14 @@ import asyncio
 
 from aiogram import Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src import config
 from src.db.repositories.users import (
-    get_or_create_user,
-    is_user_authorized,
     authorize_user,
+    get_or_create_user,
     get_screenshots_mode,
+    is_user_authorized,
     set_screenshots_mode,
 )
 from src.db.repositories.videos import get_user_stats_summary
@@ -32,31 +32,34 @@ def main_actions_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="⚙️ Режим 2/3 скрина", callback_data="help_mode"),
+                InlineKeyboardButton(text="🔌 API / Sources", callback_data="help_sources"),
             ],
         ]
     )
 
-# Режим скриншотов: 2 или 3 на одно видео (используется в start и upload)
+
 def screenshots_mode_keyboard(current: str) -> InlineKeyboardMarkup:
-    """Клавиатура переключения режима: 2 или 3 скриншота."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="📸 2 скриншота" + (" ✓" if current == "2" else ""),
-                callback_data="mode_2",
-            ),
-            InlineKeyboardButton(
-                text="📸 3 скриншота" + (" ✓" if current == "3" else ""),
-                callback_data="mode_3",
-            ),
-        ],
-    ])
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📸 2 скриншота" + (" ✓" if current == "2" else ""),
+                    callback_data="mode_2",
+                ),
+                InlineKeyboardButton(
+                    text="📸 3 скриншота" + (" ✓" if current == "3" else ""),
+                    callback_data="mode_3",
+                ),
+            ],
+        ]
+    )
+
 
 WELCOME_UNAUTHORIZED_TEXT = (
     "👋 <b>Привет!</b>\n\n"
     "Я помогаю вести две вещи:\n"
     "• разбор роликов по скринам\n"
-    "• обновление маркетинговой воронки по CSV\n\n"
+    "• обновление маркетинговой воронки по CSV и API-источникам\n\n"
     "🔐 Для доступа введи:\n"
     "<code>/start КОДОВОЕ_СЛОВО</code>\n\n"
     "Кодовое слово узнай у администратора."
@@ -66,13 +69,15 @@ START_TEXT = (
     "👋 <b>Creator Copilot</b>\n\n"
     "<b>Что делает бот:</b>\n"
     "• <b>Скрины роликов</b> -> лист <b>Video Analysis</b>\n"
-    "• <b>CSV воронки</b> -> лист <b>Marketing Funnels</b>\n\n"
+    "• <b>CSV воронки</b> -> лист <b>Marketing Funnels</b>\n"
+    "• <b>API / Sources</b> -> проверка готовности App Store и Google Play\n\n"
     "<b>Быстрый старт:</b>\n"
     "1. Для скринов: <code>/upload</code>\n"
     "2. Для CSV: <code>/import_csv</code>\n"
-    "3. Выйти из режима скринов: <code>/done</code>\n\n"
+    "3. Для API-источников: <code>/sources</code>\n"
+    "4. Выйти из режима скринов: <code>/done</code>\n\n"
     "<b>Остальные команды:</b>\n"
-    "/stats, /day_stats, /all_stats, /help"
+    "/stats, /day_stats, /all_stats, /help, /sync_funnels"
 )
 
 HELP_TEXT = (
@@ -86,6 +91,9 @@ HELP_TEXT = (
     "1. <code>/import_csv</code>\n"
     "2. Отправь CSV в личку боту\n"
     "Результат: upsert строк в <b>Marketing Funnels</b> по ключу Date + Channel + Store.\n\n"
+    "<b>API / Sources</b>\n"
+    "1. <code>/sources</code> — проверить готовность App Store / Google Play\n"
+    "2. <code>/sync_funnels</code> — посмотреть текущий статус автосбора\n\n"
     "👇 <b>Полезные материалы:</b>"
 )
 
@@ -112,28 +120,31 @@ MODE_HELP_TEXT = (
     "Сменить режим: <code>/mode</code>"
 )
 
+SOURCES_HELP_TEXT = (
+    "🔌 <b>API / Sources</b>\n\n"
+    "Команда <code>/sources</code> показывает, готовы ли App Store Connect и Google Play.\n"
+    "Команда <code>/sync_funnels</code> показывает текущий статус автосбора.\n\n"
+    "Если источник ещё не подключён, CSV остаётся fallback-вариантом."
+)
+
 
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
-    """Обработка /start с опциональным кодовым словом."""
     user = message.from_user
     if not user:
         await message.answer("Не удалось определить пользователя.")
         return
 
     supabase = get_supabase()
-    user_data = get_or_create_user(supabase, user.id, user.username)
+    get_or_create_user(supabase, user.id, user.username)
 
-    # Получаем текст после команды (кодовое слово)
     args = message.text.split(maxsplit=1) if message.text else []
     provided_code = args[1].strip() if len(args) > 1 else None
 
-    # Проверяем, авторизован ли уже пользователь
     if is_user_authorized(supabase, user.id):
         await message.answer(START_TEXT, reply_markup=main_actions_keyboard())
         return
 
-    # Проверяем кодовое слово
     if config.AUTH_SECRET and provided_code == config.AUTH_SECRET:
         if authorize_user(supabase, user.id):
             await message.answer(
@@ -141,43 +152,47 @@ async def cmd_start(message: Message) -> None:
                 reply_markup=main_actions_keyboard(),
             )
         else:
-            await message.answer(
-                "⚠️ Ошибка авторизации. Попробуй позже или обратись к администратору."
-            )
+            await message.answer("⚠️ Ошибка авторизации. Попробуй позже или обратись к администратору.")
         return
 
-    # Не авторизован и нет/неверный код
     if config.AUTH_SECRET:
         await message.answer(WELCOME_UNAUTHORIZED_TEXT)
     else:
-        # Если код не настроен — разрешаем доступ
         authorize_user(supabase, user.id)
         await message.answer(START_TEXT, reply_markup=main_actions_keyboard())
 
 
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📸 Скрины", callback_data="help_screens"),
-            InlineKeyboardButton(text="📄 CSV", callback_data="help_csv"),
-        ],
-        [
-            InlineKeyboardButton(text="⚙️ Режим 2/3", callback_data="help_mode"),
-        ],
-        [
-            InlineKeyboardButton(text="📚 Бенчмарки и оценка", url="https://www.notion.so/3031199f0c2480c98ef3fbb036702cc4?source=copy_link")
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📸 Скрины", callback_data="help_screens"),
+                InlineKeyboardButton(text="📄 CSV", callback_data="help_csv"),
+            ],
+            [
+                InlineKeyboardButton(text="⚙️ Режим 2/3", callback_data="help_mode"),
+                InlineKeyboardButton(text="🔌 API / Sources", callback_data="help_sources"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📚 Бенчмарки и оценка",
+                    url="https://www.notion.so/3031199f0c2480c98ef3fbb036702cc4?source=copy_link",
+                )
+            ],
         ]
-    ])
+    )
     await message.answer(HELP_TEXT, reply_markup=keyboard)
 
 
-@router.callback_query(lambda c: c.data in ("help_screens", "help_csv", "help_mode"))
+@router.callback_query(lambda c: c.data in ("help_screens", "help_csv", "help_mode", "help_sources"))
 async def cb_quick_help(callback: CallbackQuery) -> None:
     if callback.data == "help_screens":
         text = SCREENSHOTS_HELP_TEXT
     elif callback.data == "help_csv":
         text = CSV_QUICK_HELP_TEXT
+    elif callback.data == "help_sources":
+        text = SOURCES_HELP_TEXT
     else:
         text = MODE_HELP_TEXT
     await callback.message.answer(text)
@@ -186,7 +201,6 @@ async def cb_quick_help(callback: CallbackQuery) -> None:
 
 @router.message(Command("mode"))
 async def cmd_mode(message: Message) -> None:
-    """Показать текущий режим скриншотов и кнопки переключения."""
     user_id = message.from_user.id if message.from_user else 0
     if not user_id:
         await message.answer("Не удалось определить пользователя.")
@@ -205,7 +219,6 @@ async def cmd_mode(message: Message) -> None:
 
 @router.callback_query(lambda c: c.data in ("mode_2", "mode_3"))
 async def cb_screenshots_mode(callback: CallbackQuery) -> None:
-    """Переключение режима 2/3 скриншота и подтверждение."""
     user_id = callback.from_user.id if callback.from_user else 0
     if not user_id:
         await callback.answer("Ошибка: пользователь не определён.")
@@ -221,7 +234,6 @@ async def cb_screenshots_mode(callback: CallbackQuery) -> None:
         return
     label = "2 скриншота (Обзор + Удержание)" if target == "2" else "3 скриншота"
     await callback.answer(f"Режим переключён на {label}")
-    # Обновляем только клавиатуру (сообщение может быть /start или /mode)
     try:
         if callback.message:
             await callback.message.edit_reply_markup(reply_markup=screenshots_mode_keyboard(target))
@@ -229,14 +241,11 @@ async def cb_screenshots_mode(callback: CallbackQuery) -> None:
         pass
 
 
-# Оценка токенов и стоимости AI на один анализ ролика (2 вызова: extraction + scoring)
-# Данные из OpenRouter (Gemini 3 Flash): ~9.2k токенов, ~$0.017 на ролик
 ESTIMATED_TOKENS_PER_VIDEO = 9200
 ESTIMATED_COST_USD_PER_VIDEO = 0.017
 
 
 def _normalize_platform_for_stats(raw_platform: str) -> str:
-    """Приводит platform из БД к читаемому названию: TikTok / Instagram."""
     p = (raw_platform or "").lower()
     if "tiktok" in p:
         return "TikTok"
@@ -247,7 +256,6 @@ def _normalize_platform_for_stats(raw_platform: str) -> str:
 
 @router.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
-    """Показывает сводную статистику анализов пользователя."""
     user_id = message.from_user.id if message.from_user else 0
     if not user_id:
         await message.answer("Не удалось определить пользователя.")
@@ -271,13 +279,11 @@ async def cmd_stats(message: Message) -> None:
     avg = stats.get("avg_score", 0)
     platforms_raw = stats.get("platforms", {})
 
-    # Считаем по платформам: TikTok и Instagram (reels)
     platform_counts: dict[str, int] = {}
-    for p, count in platforms_raw.items():
-        name = _normalize_platform_for_stats(p)
+    for platform_name, count in platforms_raw.items():
+        name = _normalize_platform_for_stats(platform_name)
         platform_counts[name] = platform_counts.get(name, 0) + count
 
-    # Оценка токенов и стоимости на основе реальных данных OpenRouter
     avg_tokens = ESTIMATED_TOKENS_PER_VIDEO
     cost_per_video = ESTIMATED_COST_USD_PER_VIDEO
     total_cost_est = total * cost_per_video
@@ -290,19 +296,21 @@ async def cmd_stats(message: Message) -> None:
         "📱 <b>По платформам:</b>",
     ]
 
-    for plat in ("TikTok", "Instagram", "Другое"):
-        cnt = platform_counts.get(plat, 0)
-        if cnt > 0:
-            lines.append(f"   • {plat}: <b>{cnt}</b>")
+    for platform_name in ("TikTok", "Instagram", "Другое"):
+        count = platform_counts.get(platform_name, 0)
+        if count > 0:
+            lines.append(f"   • {platform_name}: <b>{count}</b>")
 
-    lines.extend([
-        "",
-        f"📈 Средний балл: <b>{avg}/10</b>",
-        "",
-        "🤖 <b>AI (оценка по OpenRouter):</b>",
-        f"   • ~{avg_tokens:,} токенов на ролик".replace(",", " "),
-        f"   • ~${cost_per_video:.3f} за ролик",
-        f"   • Итого за {total} видео: ~${total_cost_est:.2f}",
-    ])
+    lines.extend(
+        [
+            "",
+            f"📈 Средний балл: <b>{avg}/10</b>",
+            "",
+            "🤖 <b>AI (оценка по OpenRouter):</b>",
+            f"   • ~{avg_tokens:,} токенов на ролик".replace(",", " "),
+            f"   • ~${cost_per_video:.3f} за ролик",
+            f"   • Итого за {total} видео: ~${total_cost_est:.2f}",
+        ]
+    )
 
     await message.answer("\n".join(lines))

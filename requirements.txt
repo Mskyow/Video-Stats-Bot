@@ -3,6 +3,7 @@ aiogram>=3.13,<4
 
 # AI (OpenRouter: Gemini 3 Flash thinking)
 requests>=2.31,<3
+PyJWT[crypto]>=2.9,<3
 
 # DB
 supabase>=2.10,<3

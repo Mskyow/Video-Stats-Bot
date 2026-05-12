@@ -89,6 +89,18 @@ REPORT_TIMEZONE: str = _get_optional("REPORT_TIMEZONE") or "Europe/Minsk"
 REPORT_HOUR: int = _get_int_optional("REPORT_HOUR", 15)
 REPORT_MINUTE: int = _get_int_optional("REPORT_MINUTE", 0)
 
+# Marketing funnel sources
+APPSTORE_ISSUER_ID: str | None = _get_optional("APPSTORE_ISSUER_ID")
+APPSTORE_KEY_ID: str | None = _get_optional("APPSTORE_KEY_ID")
+APPSTORE_PRIVATE_KEY: str | None = _get_optional("APPSTORE_PRIVATE_KEY")
+APPSTORE_BUNDLE_ID: str | None = _get_optional("APPSTORE_BUNDLE_ID")
+
+GOOGLE_PLAY_PACKAGE_NAME: str | None = _get_optional("GOOGLE_PLAY_PACKAGE_NAME")
+GOOGLE_PLAY_REPORTS_BUCKET: str | None = _get_optional("GOOGLE_PLAY_REPORTS_BUCKET")
+GOOGLE_PLAY_REPORTS_PREFIX: str | None = _get_optional("GOOGLE_PLAY_REPORTS_PREFIX")
+GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: str | None = _get_optional("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON")
+GOOGLE_PLAY_SERVICE_ACCOUNT_PATH: str | None = _get_optional("GOOGLE_PLAY_SERVICE_ACCOUNT_PATH")
+
 # Лимит одновременных запросов к AI
 MAX_CONCURRENT_ANALYSIS: int = max(1, _get_int_optional("MAX_CONCURRENT_ANALYSIS", 5))
 # Тайм-аут одного запроса к OpenRouter (сек)
