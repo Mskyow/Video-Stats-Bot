@@ -850,6 +850,18 @@ def _normalize_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
     churn_point = source.get("tiktok_churn_point")
     normalized["tiktok_churn_point"] = str(churn_point) if churn_point is not None else None
 
+    # Guardrail: positive retention and zero average watch time contradict each other.
+    # In such cases OCR/model usually failed to read watch time, so keep it missing
+    # instead of writing a misleading 0%.
+    retention_value = normalized.get("retention_3s")
+    if (
+        normalized.get("avg_watch_time_pct") is not None
+        and float(normalized["avg_watch_time_pct"]) <= 0
+        and retention_value is not None
+        and float(retention_value) > 0
+    ):
+        normalized["avg_watch_time_pct"] = None
+
     return normalized
 
 

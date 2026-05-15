@@ -149,6 +149,21 @@ def test_avg_watch_time_pct_can_exceed_100() -> None:
     assert normalized["avg_watch_time_pct"] == 128.6
 
 
+def test_avg_watch_time_zero_with_positive_retention_becomes_missing() -> None:
+    normalized = _normalize_metrics(
+        {
+            "views": 100,
+            "likes": 10,
+            "comments": 1,
+            "shares": 2,
+            "saves": 3,
+            "retention_3s": 65,
+            "avg_watch_time_pct": 0,
+        }
+    )
+    assert normalized["avg_watch_time_pct"] is None
+
+
 def test_normalize_metrics_end_retention_3_screenshot_mode() -> None:
     """3-screenshot mode: end_retention_second as int, end_retention_pct clamped 0-100."""
     normalized = _normalize_metrics(
