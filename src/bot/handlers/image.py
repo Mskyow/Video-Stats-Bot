@@ -15,6 +15,7 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.fsm.context import FSMContext
 
 from src.ai.openrouter_service import analyze_screenshot
+from src.bot.states import UploadMode
 from src.config import (
     GOOGLE_SHEET_ID,
     MAX_CONCURRENT_ANALYSIS,
@@ -70,7 +71,12 @@ def _format_processing_exception(exc: Exception) -> str:
 
 
 @router.message(F.photo)
-async def handle_photo(message: Message, bot: Bot, album: list[Message] | None = None) -> None:
+async def handle_photo(
+    message: Message,
+    bot: Bot,
+    state: FSMContext,
+    album: list[Message] | None = None,
+) -> None:
     """
     Обрабатывает альбом скриншотов (или одиночное фото).
     
@@ -81,6 +87,14 @@ async def handle_photo(message: Message, bot: Bot, album: list[Message] | None =
     4. Сохраняем успешные результаты в БД/Google Sheets.
     5. Формируем единый сводный отчет.
     """
+    # Обрабатываем скриншоты только в личке и только после явного /upload.
+    if message.chat.type != "private":
+        return
+
+    current_state = await state.get_state()
+    if current_state != UploadMode.active:
+        return
+
     # Если middleware не передал album, используем само сообщение как список из 1
     messages = album or [message]
     user_id = message.from_user.id if message.from_user else 0
