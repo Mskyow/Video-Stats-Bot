@@ -13,6 +13,7 @@ from aiogram.types import BotCommand, BotCommandScopeDefault
 
 from src import config
 from src.bot.handlers import (
+    chat_info_router,
     csv_router,
     funnel_sync_router,
     image_router,
@@ -37,6 +38,7 @@ def _setup_dispatch(dp: Dispatcher, bot: Bot) -> None:
     root.message.middleware(AlbumMiddleware(latency=0.6))
 
     root.include_routers(
+        chat_info_router,
         csv_router,
         funnel_sync_router,
         upload_router,
@@ -52,6 +54,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="start", description="Главное меню"),
         BotCommand(command="upload", description="Загрузить скрины роликов"),
         BotCommand(command="import_csv", description="Импортировать CSV воронки"),
+        BotCommand(command="chat_info", description="Показать chat_id и topic_id"),
         BotCommand(command="sources", description="Статус App Store / Google Play"),
         BotCommand(command="sync_funnels", description="Статус автосбора воронки"),
         BotCommand(command="done", description="Выключить режим скринов"),
