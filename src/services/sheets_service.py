@@ -910,3 +910,80 @@ def import_marketing_funnel_csv_rows(rows: list[dict[str, Any]]) -> dict[str, An
 def parse_csv_text(content: str) -> list[dict[str, str]]:
     reader = csv.DictReader(content.splitlines())
     return list(reader)
+
+
+def get_marketing_funnel_daily_summary(date_value: str) -> dict[str, Any]:
+    """
+    Reads Marketing Funnels rows for a specific YYYY-MM-DD date and returns a compact summary
+    suitable for Telegram reports.
+    """
+    if (not GOOGLE_SHEET_CREDENTIALS_PATH and not GOOGLE_CREDENTIALS_JSON) or not GOOGLE_SHEET_ID:
+        return {"available": False, "reason": "not_configured", "date": date_value}
+
+    try:
+        client = _get_client()
+        spreadsheet = _open_spreadsheet(client)
+        worksheet = _get_or_create_worksheet(
+            spreadsheet,
+            MARKETING_FUNNELS_WORKSHEET_NAME,
+            MARKETING_FUNNELS_COLUMNS,
+        )
+        records = _worksheet_records(worksheet, MARKETING_FUNNELS_COLUMNS)
+    except Exception:
+        logger.exception("Failed to read Marketing Funnels summary")
+        return {"available": False, "reason": "read_failed", "date": date_value}
+
+    day_rows = [record for record in records if str(record.get("Date", "")).strip() == date_value]
+    if not day_rows:
+        return {"available": True, "date": date_value, "has_rows": False}
+
+    social_views: dict[str, int] = {
+        "TikTok Viral": 0,
+        "YouTube Viral": 0,
+        "Instagram Viral": 0,
+    }
+    totals_by_store: dict[str, dict[str, int]] = {
+        "App Store": {"search_impressions": 0, "product_page_views": 0, "installs": 0},
+        "Google Play": {"search_impressions": 0, "product_page_views": 0, "installs": 0},
+    }
+
+    # For viral views, rows are duplicated across stores. Use max per channel to avoid double counting.
+    for channel in social_views:
+        social_views[channel] = max(
+            (
+                _parse_int(record.get("Views"))
+                for record in day_rows
+                if record.get("Channel") == channel
+            ),
+            default=0,
+        )
+
+    total_rows = [record for record in day_rows if record.get("Channel") == "TOTAL"]
+    if total_rows:
+        for record in total_rows:
+            store = str(record.get("Store", "")).strip()
+            if store not in totals_by_store:
+                continue
+            totals_by_store[store]["search_impressions"] = _parse_int(record.get("Search Impressions"))
+            totals_by_store[store]["product_page_views"] = _parse_int(record.get("Product Page Views"))
+            totals_by_store[store]["installs"] = _parse_int(record.get("Installs"))
+    else:
+        for store in totals_by_store:
+            relevant_rows = [record for record in day_rows if record.get("Store") == store]
+            totals_by_store[store]["search_impressions"] = sum(
+                _parse_int(record.get("Search Impressions")) for record in relevant_rows
+            )
+            totals_by_store[store]["product_page_views"] = sum(
+                _parse_int(record.get("Product Page Views")) for record in relevant_rows
+            )
+            totals_by_store[store]["installs"] = sum(
+                _parse_int(record.get("Installs")) for record in relevant_rows
+            )
+
+    return {
+        "available": True,
+        "date": date_value,
+        "has_rows": True,
+        "social_views": social_views,
+        "stores": totals_by_store,
+    }

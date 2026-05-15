@@ -35,6 +35,7 @@ from src.services.sheets_service import (
     _get_client,
     _get_credentials,
     export_video_to_sheet,
+    get_marketing_funnel_daily_summary,
     import_marketing_funnel_csv_rows,
     queue_export,
     validate_normalized_csv_headers,
@@ -245,6 +246,43 @@ class TestSheetFlows:
         assert organic_rows[0][4] == "200"
         assert organic_rows[0][5] == "50"
         assert organic_rows[0][6] == "15"
+
+    @patch("src.services.sheets_service._get_client")
+    def test_get_marketing_funnel_daily_summary_dedupes_social_views(self, mock_get_client, fake_client, fake_spreadsheet):
+        mock_get_client.return_value = fake_client
+        with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test-creds"):
+            with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "sheet-id"):
+                import_marketing_funnel_csv_rows(
+                    [
+                        {
+                            "date": "2026-05-12",
+                            "channel": "Store Organic",
+                            "store": "App Store",
+                            "search_impressions": "150",
+                            "product_page_views": "40",
+                            "installs": "12",
+                        },
+                        {
+                            "date": "2026-05-12",
+                            "channel": "Store Organic",
+                            "store": "Google Play",
+                            "search_impressions": "90",
+                            "product_page_views": "25",
+                            "installs": "5",
+                        },
+                    ]
+                )
+                funnel_sheet = fake_spreadsheet.sheets["Marketing Funnels"]
+                funnel_sheet.append_row(["2026-05-12", "TikTok Viral", "App Store", "813", "6", "", "", ""])
+                funnel_sheet.append_row(["2026-05-12", "TikTok Viral", "Google Play", "813", "6", "", "", ""])
+
+                summary = get_marketing_funnel_daily_summary("2026-05-12")
+
+        assert summary["available"] is True
+        assert summary["has_rows"] is True
+        assert summary["social_views"]["TikTok Viral"] == 813
+        assert summary["stores"]["App Store"]["installs"] == 12
+        assert summary["stores"]["Google Play"]["installs"] == 5
 
 
 class TestQueue:

@@ -3,6 +3,7 @@ Handlers for statistics and reporting commands (/day_stats, /all_stats).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Any
@@ -18,10 +19,18 @@ from src.config import (
     REPORT_TOPIC_ID,
 )
 from src.db.repositories.videos import get_videos_by_date_range, get_global_stats
+from src.services.sheets_service import get_marketing_funnel_daily_summary
 
 logger = logging.getLogger(__name__)
 
 router = Router(name="stats")
+
+
+def _format_int(value: Any) -> str:
+    try:
+        return f"{int(value):,}".replace(",", " ")
+    except (ValueError, TypeError):
+        return "0"
 
 
 async def build_day_stats_report(
@@ -113,13 +122,49 @@ async def build_day_stats_report(
     formatted_views = f"{max_views:,}".replace(",", " ")
 
     report_lines = [
-        f"<b>Отчет по видео за последние сутки ({now_minsk.strftime('%d.%m')}):</b>\n",
-        "1. Количество видео по платформам:",
-        f"{platforms_text}",
-        f"2. Средний балл за сегодня: {avg_score:.1f}/10",
-        f"3. Высший балл за видео: {max_score:.1f}/10",
-        f"4. Высшие просмотры на видео за сегодня: {formatted_views}",
+        f"📊 <b>Ежедневный отчёт</b>",
+        f"<i>Видео: последние 24 часа. Дата отчёта: {now_minsk.strftime('%b %d')}</i>",
+        "",
+        "<b>Видео</b>",
+        f"• Загружено: <b>{len(videos)}</b>",
+        f"• Платформы: {platforms_text}",
+        f"• Средний score: <b>{avg_score:.1f}/10</b>",
+        f"• Лучший score: <b>{max_score:.1f}/10</b>",
+        f"• Макс. views: <b>{formatted_views}</b>",
     ]
+
+    funnel_report_date = (now_minsk - timedelta(days=1)).strftime("%Y-%m-%d")
+    funnel_summary = await asyncio.to_thread(get_marketing_funnel_daily_summary, funnel_report_date)
+
+    report_lines.extend(["", f"<b>Marketing Funnels ({(now_minsk - timedelta(days=1)).strftime('%b %d')})</b>"])
+    if not funnel_summary.get("available"):
+        report_lines.append("• Воронка недоступна: не настроен доступ к таблице")
+    elif not funnel_summary.get("has_rows"):
+        report_lines.append("• За эту дату в листе пока нет строк")
+    else:
+        social_views = funnel_summary.get("social_views", {})
+        stores = funnel_summary.get("stores", {})
+        report_lines.append(
+            "• Viral views: "
+            f"TikTok <b>{_format_int(social_views.get('TikTok Viral', 0))}</b>, "
+            f"YouTube <b>{_format_int(social_views.get('YouTube Viral', 0))}</b>, "
+            f"Instagram <b>{_format_int(social_views.get('Instagram Viral', 0))}</b>"
+        )
+
+        app_store = stores.get("App Store", {})
+        google_play = stores.get("Google Play", {})
+        report_lines.append(
+            "• App Store: "
+            f"search <b>{_format_int(app_store.get('search_impressions', 0))}</b>, "
+            f"page views <b>{_format_int(app_store.get('product_page_views', 0))}</b>, "
+            f"installs <b>{_format_int(app_store.get('installs', 0))}</b>"
+        )
+        report_lines.append(
+            "• Google Play: "
+            f"search <b>{_format_int(google_play.get('search_impressions', 0))}</b>, "
+            f"page views <b>{_format_int(google_play.get('product_page_views', 0))}</b>, "
+            f"installs <b>{_format_int(google_play.get('installs', 0))}</b>"
+        )
 
     report_text = "\n".join(report_lines)
 
@@ -158,7 +203,7 @@ async def build_day_stats_report(
         logger.warning("Failed to generate AI summary: %s", e)
 
     # Добавляем ссылку на Google Sheets в конец
-    report_text += "\n\nДля просмотра детальной статистики перейдите в Google таблицу👇"
+    report_text += "\n\nДля деталей — Google таблица 👇"
 
     # Клавиатура с кнопкой
     markup = None
@@ -299,12 +344,6 @@ async def cmd_all_stats(message: Message, **kwargs) -> None:
                 "Отправь скриншоты метрик для анализа."
             )
             return
-
-        def format_int(value: Any) -> str:
-            try:
-                return f"{int(value):,}".replace(",", " ")
-            except (ValueError, TypeError):
-                return "0"
 
         tiktok_total = tiktok_stats.get("total_videos", 0)
         instagram_total = instagram_stats.get("total_videos", 0)
