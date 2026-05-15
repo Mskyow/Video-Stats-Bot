@@ -45,6 +45,7 @@ VIDEO_ANALYSIS_COLUMNS = [
     "Comments",
     "Shares",
     "Retention",
+    "Avg Watch Time Sec",
     "Avg Watch Time",
     "ER",
     "Score",
@@ -183,14 +184,23 @@ def _get_or_create_worksheet(
     title: str,
     headers: list[str],
 ) -> gspread.Worksheet:
+    required_cols = max(len(headers), 12)
     try:
         worksheet = spreadsheet.worksheet(title)
     except WorksheetNotFound:
         worksheet = spreadsheet.add_worksheet(
             title=title,
             rows=1000,
-            cols=max(len(headers), 12),
+            cols=required_cols,
         )
+    else:
+        notes_required_cols = len(headers) + 3
+        required_cols = max(required_cols, notes_required_cols)
+        try:
+            if getattr(worksheet, "col_count", required_cols) < required_cols:
+                worksheet.resize(cols=required_cols)
+        except Exception:
+            logger.exception("Failed to resize worksheet %s to %s columns", title, required_cols)
     _ensure_headers(worksheet, headers)
     return worksheet
 
@@ -202,6 +212,61 @@ def _ensure_headers(worksheet: gspread.Worksheet, headers: list[str]) -> None:
         values=[headers],
         value_input_option="USER_ENTERED",
     )
+
+
+def _format_sheet_range(
+    worksheet: gspread.Worksheet,
+    range_name: str,
+    *,
+    horizontal: str = "CENTER",
+    vertical: str = "MIDDLE",
+    bold: bool = False,
+) -> None:
+    if not hasattr(worksheet, "format"):
+        return
+    try:
+        worksheet.format(
+            range_name,
+            {
+                "horizontalAlignment": horizontal,
+                "verticalAlignment": vertical,
+                "textFormat": {"bold": bold},
+            },
+        )
+    except Exception:
+        logger.exception("Failed to format range %s on worksheet %s", range_name, worksheet.title)
+
+
+def _upsert_video_analysis_notes(worksheet: gspread.Worksheet) -> None:
+    start_col = len(VIDEO_ANALYSIS_COLUMNS) + 2
+    title_col = _column_letter(start_col)
+    metric_col = _column_letter(start_col)
+    meaning_col = _column_letter(start_col + 1)
+    formula_col = _column_letter(start_col + 2)
+    notes_rows = [
+        ["Metric Guide", "", ""],
+        ["Metric", "Meaning", "How it is calculated"],
+        ["Retention", "Percent of viewers still watching at the chosen checkpoint", "viewers still watching / total viewers * 100"],
+        ["Avg Watch Time Sec", "Average watch time in seconds", "video_duration_sec * avg_watch_time_pct / 100"],
+        ["Avg Watch Time", "Average watch time as percent of video length", "avg watch time sec / video duration * 100"],
+        ["ER", "Engagement rate", "(likes + comments + shares + saves) / views * 100"],
+    ]
+    end_col = _column_letter(start_col + 2)
+    worksheet.update(
+        range_name=f"{title_col}1:{end_col}{len(notes_rows)}",
+        values=notes_rows,
+        value_input_option="USER_ENTERED",
+    )
+    _format_sheet_range(worksheet, f"{title_col}1:{end_col}1", horizontal="LEFT", bold=True)
+    _format_sheet_range(worksheet, f"{metric_col}2:{end_col}2", horizontal="LEFT", bold=True)
+    _format_sheet_range(worksheet, f"{metric_col}3:{end_col}{len(notes_rows)}", horizontal="LEFT")
+
+
+def _apply_video_analysis_layout(worksheet: gspread.Worksheet) -> None:
+    end_col = _column_letter(len(VIDEO_ANALYSIS_COLUMNS))
+    _format_sheet_range(worksheet, f"A1:{end_col}1", bold=True)
+    _format_sheet_range(worksheet, f"A2:{end_col}1000")
+    _upsert_video_analysis_notes(worksheet)
 
 
 def _normalize_platform(value: Any) -> str:
@@ -250,6 +315,22 @@ def _parse_datetime(value: Any) -> datetime | None:
     return parsed
 
 
+def _source_mentions_year(value: Any) -> bool:
+    text = str(value or "")
+    return bool(re.search(r"\b(19|20)\d{2}\b", text))
+
+
+def _format_posted_at_for_sheet(value: Any) -> str:
+    parsed = _parse_datetime(value)
+    if not parsed:
+        return str(value or "").strip()
+    month = parsed.strftime("%b")
+    day = parsed.day
+    if _source_mentions_year(value):
+        return f"{month} {day}, {parsed.year}"
+    return f"{month} {day}"
+
+
 def _normalize_date_key(value: Any) -> str | None:
     parsed = _parse_datetime(value)
     if not parsed:
@@ -278,6 +359,18 @@ def _format_percentage(value: Any) -> str:
 
 
 def _format_number(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if numeric.is_integer():
+        return str(int(numeric))
+    return f"{numeric:.2f}".rstrip("0").rstrip(".")
+
+
+def _format_seconds(value: Any) -> str:
     if value in (None, ""):
         return ""
     try:
@@ -370,6 +463,14 @@ def _build_video_analysis_row(video_data: dict[str, Any]) -> list[str]:
     recorded_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     retention = metrics.get("retention_3s") or video_data.get("retention_3s")
     avg_watch_time = metrics.get("avg_watch_time_pct") or video_data.get("avg_watch_time_pct")
+    avg_watch_time_sec = metrics.get("avg_watch_time_sec") or video_data.get("avg_watch_time_sec")
+    if avg_watch_time_sec is None:
+        video_duration_sec = metrics.get("video_duration_sec") or video_data.get("video_duration_sec")
+        try:
+            if avg_watch_time is not None and video_duration_sec is not None:
+                avg_watch_time_sec = float(video_duration_sec) * float(avg_watch_time) / 100.0
+        except (TypeError, ValueError):
+            avg_watch_time_sec = None
     er = video_data.get("aggregated_er")
     if er is None:
         er = _calculate_er(
@@ -386,12 +487,13 @@ def _build_video_analysis_row(video_data: dict[str, Any]) -> list[str]:
         recorded_at,
         _normalize_platform(video_data.get("platform")),
         _extract_video_title(video_data),
-        re.sub(r"^\s*posted\s+on\s+", "", str(posted_at or ""), flags=re.IGNORECASE).strip(),
+        _format_posted_at_for_sheet(posted_at),
         str(video_data.get("content_type") or "-"),
         _format_number(views),
         _format_number(comments),
         _format_number(shares),
         _format_percentage(retention),
+        _format_seconds(avg_watch_time_sec),
         _format_percentage(avg_watch_time),
         _format_percentage(er),
         _format_number(video_data.get("score")),
@@ -625,6 +727,7 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
         client = _get_client()
         spreadsheet = _open_spreadsheet(client)
         video_ws = _get_or_create_worksheet(spreadsheet, VIDEO_ANALYSIS_WORKSHEET_NAME, VIDEO_ANALYSIS_COLUMNS)
+        _apply_video_analysis_layout(video_ws)
         row = _build_video_analysis_row(video_data)
         if not _append_row_with_retry(video_ws, row):
             return False
@@ -644,6 +747,52 @@ def export_video_to_sheet(video_data: dict[str, Any]) -> bool:
 
 
 export_hook_to_sheet = export_video_to_sheet
+
+
+def normalize_video_analysis_sheet_layout() -> bool:
+    if (not GOOGLE_SHEET_CREDENTIALS_PATH and not GOOGLE_CREDENTIALS_JSON) or not GOOGLE_SHEET_ID:
+        logger.warning("Google Sheets not configured; skip sheet normalization")
+        return False
+
+    try:
+        client = _get_client()
+        spreadsheet = _open_spreadsheet(client)
+        worksheet = _get_or_create_worksheet(spreadsheet, VIDEO_ANALYSIS_WORKSHEET_NAME, VIDEO_ANALYSIS_COLUMNS)
+        records = _worksheet_records(worksheet, VIDEO_ANALYSIS_COLUMNS)
+        rewritten_rows: list[list[str]] = []
+        for record in records:
+            rewritten_rows.append(
+                [
+                    str(record.get("Recorded At", "")).strip(),
+                    str(record.get("Platform", "")).strip(),
+                    str(record.get("Video Title", "")).strip(),
+                    _format_posted_at_for_sheet(record.get("Posted At")),
+                    str(record.get("Content Type", "")).strip(),
+                    str(record.get("Views", "")).strip(),
+                    str(record.get("Comments", "")).strip(),
+                    str(record.get("Shares", "")).strip(),
+                    str(record.get("Retention", "")).strip(),
+                    "",  # historical rows do not have enough data to reconstruct seconds reliably
+                    str(record.get("Avg Watch Time", "")).strip(),
+                    str(record.get("ER", "")).strip(),
+                    str(record.get("Score", "")).strip(),
+                    str(record.get("Verdict", "")).strip(),
+                ]
+            )
+
+        end_col = _column_letter(len(VIDEO_ANALYSIS_COLUMNS))
+        worksheet.batch_clear([f"A2:{end_col}1000"])
+        if rewritten_rows:
+            worksheet.update(
+                range_name=f"A2:{end_col}{len(rewritten_rows) + 1}",
+                values=rewritten_rows,
+                value_input_option="USER_ENTERED",
+            )
+        _apply_video_analysis_layout(worksheet)
+        return True
+    except Exception:
+        logger.exception("Failed to normalize Video Analysis sheet layout")
+        return False
 
 
 def validate_normalized_csv_headers(fieldnames: list[str] | None) -> list[str]:

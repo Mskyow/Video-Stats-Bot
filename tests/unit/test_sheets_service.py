@@ -47,16 +47,36 @@ class FakeWorksheet:
         self.values: list[list[str]] = []
 
     def update(self, range_name=None, values=None, value_input_option=None):
-        row_num = int("".join(ch for ch in range_name.split(":")[0] if ch.isdigit()))
+        start_ref = range_name.split(":")[0]
+        row_num = int("".join(ch for ch in start_ref if ch.isdigit()))
+        col_letters = "".join(ch for ch in start_ref if ch.isalpha())
+        col_num = 0
+        for ch in col_letters:
+            col_num = col_num * 26 + (ord(ch.upper()) - 64)
+        col_index = max(0, col_num - 1)
+
         while len(self.values) < row_num:
             self.values.append([])
-        self.values[row_num - 1] = list(values[0])
+        for offset, row_values in enumerate(values):
+            target_row = row_num - 1 + offset
+            while len(self.values) <= target_row:
+                self.values.append([])
+            existing = self.values[target_row]
+            needed = col_index + len(row_values)
+            if len(existing) < needed:
+                existing.extend([""] * (needed - len(existing)))
+            for idx, cell in enumerate(row_values):
+                existing[col_index + idx] = str(cell)
+            self.values[target_row] = existing
 
     def append_row(self, row, value_input_option=None):
         self.values.append([str(cell) for cell in row])
 
     def get_all_values(self):
         return self.values
+
+    def batch_clear(self, ranges):
+        return None
 
 
 class FakeSpreadsheet:
@@ -134,9 +154,10 @@ class TestVideoAnalysisRows:
         assert row[6] == "45"
         assert row[7] == "30"
         assert row[8] == "72.5%"
-        assert row[9] == "65%"
-        assert row[11] == "7.8"
-        assert "SCALE" in row[12]
+        assert row[9] == "8.5"
+        assert row[10] == "65%"
+        assert row[12] == "7.8"
+        assert "SCALE" in row[13]
 
     def test_calculate_age_hours_with_prefix(self):
         age = _calculate_age_hours("Posted on Feb 6, 2026, 12:53 PM")
@@ -174,10 +195,12 @@ class TestSheetFlows:
         video_sheet = fake_spreadsheet.sheets["Video Analysis"]
         funnel_sheet = fake_spreadsheet.sheets["Marketing Funnels"]
 
-        assert video_sheet.values[0] == VIDEO_ANALYSIS_COLUMNS
-        assert video_sheet.values[1][1] == "TikTok"
+        assert video_sheet.values[0][: len(VIDEO_ANALYSIS_COLUMNS)] == VIDEO_ANALYSIS_COLUMNS
+        data_rows = [row for row in video_sheet.values[1:] if len(row) > 1 and row[1] == "TikTok"]
+        assert data_rows
+        assert data_rows[0][1] == "TikTok"
 
-        assert funnel_sheet.values[0] == MARKETING_FUNNELS_COLUMNS
+        assert funnel_sheet.values[0][: len(MARKETING_FUNNELS_COLUMNS)] == MARKETING_FUNNELS_COLUMNS
         rows = funnel_sheet.values[1:]
         assert any(row[1] == "TikTok Viral" and row[2] == "App Store" for row in rows)
         assert any(row[1] == "TikTok Viral" and row[2] == "Google Play" for row in rows)
