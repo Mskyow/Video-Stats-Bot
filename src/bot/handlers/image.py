@@ -92,7 +92,7 @@ async def handle_photo(
         return
 
     current_state = await state.get_state()
-    if current_state != UploadMode.active:
+    if current_state != UploadMode.active.state:
         return
 
     # Если middleware не передал album, используем само сообщение как список из 1
