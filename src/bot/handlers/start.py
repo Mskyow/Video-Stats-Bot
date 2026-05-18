@@ -232,15 +232,15 @@ async def cb_quick_help(callback: CallbackQuery) -> None:
     else:
         text = MODE_HELP_TEXT
     if callback.message:
-        await callback.message.edit_text(text, reply_markup=help_back_keyboard())
-    await callback.answer()
+        await callback.message.answer(text, reply_markup=help_back_keyboard())
+    await callback.answer("Открыто")
 
 
 @router.callback_query(lambda c: c.data == "back_to_main_menu")
 async def cb_back_to_main_menu(callback: CallbackQuery) -> None:
     if callback.message:
-        await callback.message.edit_text(START_TEXT, reply_markup=main_actions_keyboard())
-    await callback.answer()
+        await callback.message.answer(START_TEXT, reply_markup=main_actions_keyboard())
+    await callback.answer("Готово")
 
 
 @router.message(Command("upload_funnel"))
