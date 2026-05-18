@@ -41,6 +41,14 @@ def main_actions_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def help_back_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main_menu")]
+        ]
+    )
+
+
 def screenshots_mode_keyboard(current: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -223,7 +231,15 @@ async def cb_quick_help(callback: CallbackQuery) -> None:
         text = SOURCES_HELP_TEXT
     else:
         text = MODE_HELP_TEXT
-    await callback.message.answer(text)
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=help_back_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "back_to_main_menu")
+async def cb_back_to_main_menu(callback: CallbackQuery) -> None:
+    if callback.message:
+        await callback.message.edit_text(START_TEXT, reply_markup=main_actions_keyboard())
     await callback.answer()
 
 
