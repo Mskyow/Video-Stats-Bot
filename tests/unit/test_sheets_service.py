@@ -38,6 +38,7 @@ from src.services.sheets_service import (
     get_marketing_funnel_daily_summary,
     import_marketing_funnel_csv_rows,
     queue_export,
+    upsert_marketing_funnel_rows,
     validate_normalized_csv_headers,
 )
 
@@ -246,6 +247,38 @@ class TestSheetFlows:
         assert organic_rows[0][4] == "200"
         assert organic_rows[0][5] == "50"
         assert organic_rows[0][6] == "15"
+
+    @patch("src.services.sheets_service._get_client")
+    def test_upsert_marketing_funnel_rows_recomputes_totals(self, mock_get_client, fake_client, fake_spreadsheet):
+        mock_get_client.return_value = fake_client
+        with patch("src.services.sheets_service.GOOGLE_CREDENTIALS_JSON", "test-creds"):
+            with patch("src.services.sheets_service.GOOGLE_SHEET_ID", "sheet-id"):
+                result = upsert_marketing_funnel_rows(
+                    [
+                        {
+                            "Date": "2026-05-16",
+                            "Channel": "Store Organic",
+                            "Store": "App Store",
+                            "Search Impressions": "45",
+                            "Product Page Views": "2",
+                            "Installs": "0",
+                            "Purchases": "0",
+                        },
+                        {
+                            "Date": "2026-05-16",
+                            "Channel": "Store Organic",
+                            "Store": "Google Play",
+                            "Product Page Views": "8",
+                            "Installs": "1",
+                            "Purchases": "0",
+                        },
+                    ]
+                )
+
+        assert result["created"] == 2
+        funnel_rows = fake_spreadsheet.sheets["Marketing Funnels"].values[1:]
+        assert any(row[0] == "2026-05-16" and row[1] == "TOTAL" and row[2] == "App Store" for row in funnel_rows)
+        assert any(row[0] == "2026-05-16" and row[1] == "TOTAL" and row[2] == "Google Play" for row in funnel_rows)
 
     @patch("src.services.sheets_service._get_client")
     def test_get_marketing_funnel_daily_summary_dedupes_social_views(self, mock_get_client, fake_client, fake_spreadsheet):

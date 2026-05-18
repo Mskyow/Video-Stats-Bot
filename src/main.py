@@ -15,6 +15,7 @@ from src import config
 from src.bot.handlers import (
     chat_info_router,
     csv_router,
+    funnel_screenshots_router,
     funnel_sync_router,
     image_router,
     start_router,
@@ -40,6 +41,7 @@ def _setup_dispatch(dp: Dispatcher, bot: Bot) -> None:
     root.include_routers(
         chat_info_router,
         csv_router,
+        funnel_screenshots_router,
         funnel_sync_router,
         upload_router,
         start_router,

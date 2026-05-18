@@ -907,6 +907,60 @@ def import_marketing_funnel_csv_rows(rows: list[dict[str, Any]]) -> dict[str, An
     }
 
 
+def upsert_marketing_funnel_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if (not GOOGLE_SHEET_CREDENTIALS_PATH and not GOOGLE_CREDENTIALS_JSON) or not GOOGLE_SHEET_ID:
+        raise FileNotFoundError("Google Sheets not configured.")
+
+    client = _get_client()
+    spreadsheet = _open_spreadsheet(client)
+    funnel_ws = _get_or_create_worksheet(
+        spreadsheet,
+        MARKETING_FUNNELS_WORKSHEET_NAME,
+        MARKETING_FUNNELS_COLUMNS,
+    )
+
+    created = 0
+    updated = 0
+    skipped = 0
+    errors: list[str] = []
+    affected_pairs: set[tuple[str, str]] = set()
+
+    for row_number, row in enumerate(rows, start=1):
+        try:
+            normalized = {
+                "Date": str(row.get("Date") or "").strip(),
+                "Channel": str(row.get("Channel") or "").strip(),
+                "Store": str(row.get("Store") or "").strip(),
+                "Views": row.get("Views"),
+                "Search Impressions": row.get("Search Impressions"),
+                "Product Page Views": row.get("Product Page Views"),
+                "Installs": row.get("Installs"),
+                "Purchases": row.get("Purchases"),
+            }
+            if not normalized["Date"] or not normalized["Channel"] or not normalized["Store"]:
+                raise ValueError("Date, Channel and Store are required")
+            action = _upsert_marketing_row(funnel_ws, normalized)
+            if action == "created":
+                created += 1
+            else:
+                updated += 1
+            affected_pairs.add((normalized["Date"], normalized["Store"]))
+        except Exception as exc:
+            skipped += 1
+            errors.append(f"Row {row_number}: {exc}")
+
+    if affected_pairs:
+        _recompute_total_rows(funnel_ws, affected_pairs)
+
+    return {
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "errors": errors,
+        "affected_dates": sorted({date_value for date_value, _ in affected_pairs}),
+    }
+
+
 def parse_csv_text(content: str) -> list[dict[str, str]]:
     reader = csv.DictReader(content.splitlines())
     return list(reader)

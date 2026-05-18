@@ -7,8 +7,10 @@ import asyncio
 
 from aiogram import Router
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from src.bot.states import FunnelUploadMode
 from src import config
 from src.db.repositories.users import (
     authorize_user,
@@ -31,7 +33,7 @@ def main_actions_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📄 Как импортировать CSV", callback_data="help_csv"),
             ],
             [
-                InlineKeyboardButton(text="📊 Воронка по скринам", callback_data="help_funnel_screens"),
+                InlineKeyboardButton(text="📊 Воронка по скринам", callback_data="start_funnel_upload"),
                 InlineKeyboardButton(text="⚙️ Режим 2/3 скрина", callback_data="help_mode"),
             ],
             [
@@ -140,8 +142,8 @@ FUNNEL_SCREENSHOTS_HELP_TEXT = (
     "4. Google Play — Product Page Views\n"
     "5. Google Play — Installs\n"
     "6. Adapty — Purchases (все сторы)\n\n"
-    "Пока это <b>вход во flow</b> и инструкция по формату. Сам OCR-режим воронки будет подключён следующим шагом.\n"
-    "Команда входа: <code>/upload_funnel</code>"
+    "Команда входа: <code>/upload_funnel</code>\n"
+    "Бот ждёт ровно 6 скринов за один день и после шестого сам запускает AI-распознавание."
 )
 
 MODE_HELP_TEXT = (
@@ -236,6 +238,16 @@ async def cb_quick_help(callback: CallbackQuery) -> None:
     await callback.answer("Открыто")
 
 
+@router.callback_query(lambda c: c.data == "start_funnel_upload")
+async def cb_start_funnel_upload(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(FunnelUploadMode.active)
+    await state.update_data(funnel_photos=[])
+    if callback.message:
+        await callback.message.answer(FUNNEL_SCREENSHOTS_HELP_TEXT, reply_markup=help_back_keyboard())
+    await callback.answer("Режим воронки включён")
+
+
 @router.callback_query(lambda c: c.data == "back_to_main_menu")
 async def cb_back_to_main_menu(callback: CallbackQuery) -> None:
     if callback.message:
@@ -244,7 +256,10 @@ async def cb_back_to_main_menu(callback: CallbackQuery) -> None:
 
 
 @router.message(Command("upload_funnel"))
-async def cmd_upload_funnel(message: Message) -> None:
+async def cmd_upload_funnel(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(FunnelUploadMode.active)
+    await state.update_data(funnel_photos=[])
     await message.answer(FUNNEL_SCREENSHOTS_HELP_TEXT)
 
 

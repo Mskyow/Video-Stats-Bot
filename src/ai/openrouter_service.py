@@ -259,6 +259,58 @@ SCORING_USER_PROMPT_TEMPLATE = (
     "{extracted_json}"
 )
 
+FUNNEL_SCREENSHOT_SYSTEM_PROMPT = (
+    "You extract daily funnel metrics from 6 screenshots.\n"
+    "Return ONLY valid JSON.\n"
+    "The screenshots are provided in a fixed order:\n"
+    "1) App Store Search Impressions\n"
+    "2) App Store Product Page Views\n"
+    "3) App Store Installs\n"
+    "4) Google Play Product Page Views\n"
+    "5) Google Play Installs\n"
+    "6) Adapty Purchases (all stores)\n"
+    "Read the day-specific value for the visible date row, not the total for the whole range.\n"
+    "If dates across screenshots differ, set all_dates_match=false and explain mismatch_details.\n"
+)
+
+FUNNEL_SCREENSHOT_USER_PROMPT = (
+    "Extract one daily batch from these funnel screenshots.\n"
+    "Rules:\n"
+    "- Read the per-day value for the specific visible day row or tooltip.\n"
+    "- Ignore the grand total over the whole date range.\n"
+    "- Return numeric values when visible.\n"
+    "- If a metric is not visible, return null.\n"
+    "- If Adapty purchases are shown for all stores only, put that number into all_store_purchases.\n"
+    "- Normalize the shared day into YYYY-MM-DD when possible.\n"
+)
+
+FUNNEL_SCREENSHOT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "date": {"type": ["string", "null"]},
+        "all_dates_match": {"type": "boolean"},
+        "mismatch_details": {"type": ["string", "null"]},
+        "app_store_search_impressions": {"type": ["number", "null"]},
+        "app_store_product_page_views": {"type": ["number", "null"]},
+        "app_store_installs": {"type": ["number", "null"]},
+        "google_play_product_page_views": {"type": ["number", "null"]},
+        "google_play_installs": {"type": ["number", "null"]},
+        "all_store_purchases": {"type": ["number", "null"]},
+    },
+    "required": [
+        "date",
+        "all_dates_match",
+        "mismatch_details",
+        "app_store_search_impressions",
+        "app_store_product_page_views",
+        "app_store_installs",
+        "google_play_product_page_views",
+        "google_play_installs",
+        "all_store_purchases",
+    ],
+    "additionalProperties": False,
+}
+
 
 def _build_scoring_system_prompt(content_type: Any) -> str:
     normalized_content_type = _normalize_content_type(content_type)
@@ -824,6 +876,44 @@ def _validate_analysis_result(result: dict[str, Any] | None) -> tuple[bool, list
     return len(errors) == 0, errors
 
 
+def _validate_funnel_screenshot_result(result: dict[str, Any] | None) -> tuple[bool, list[str]]:
+    errors: list[str] = []
+    if not isinstance(result, dict):
+        return False, ["Result is not a JSON object"]
+
+    required_fields = [
+        "date",
+        "all_dates_match",
+        "mismatch_details",
+        "app_store_search_impressions",
+        "app_store_product_page_views",
+        "app_store_installs",
+        "google_play_product_page_views",
+        "google_play_installs",
+        "all_store_purchases",
+    ]
+    for key in required_fields:
+        if key not in result:
+            errors.append(f"Missing required field: {key}")
+
+    if not isinstance(result.get("all_dates_match"), bool):
+        errors.append("all_dates_match must be boolean")
+
+    for key in (
+        "app_store_search_impressions",
+        "app_store_product_page_views",
+        "app_store_installs",
+        "google_play_product_page_views",
+        "google_play_installs",
+        "all_store_purchases",
+    ):
+        value = result.get(key)
+        if value is not None and not _is_number(value):
+            errors.append(f"{key} must be numeric or null")
+
+    return len(errors) == 0, errors
+
+
 def _normalize_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
     source = metrics or {}
     normalized: dict[str, Any] = {}
@@ -1130,6 +1220,62 @@ def _run_ai_step(
         "; ".join(repair_errors[:5]),
     )
     return None, repair_raw_text or raw_text
+
+
+def analyze_funnel_screenshots(
+    images_list: list[bytes],
+    mime_type: str = "image/jpeg",
+) -> tuple[dict[str, Any] | None, str | None]:
+    model = getattr(config, "OPENROUTER_MODEL", None) or DEFAULT_MODEL
+    logger.info("OpenRouter funnel AI call: model=%s reasoning_effort=medium", model)
+    api_key = getattr(config, "OPENROUTER_API_KEY", "")
+    timeout_sec = float(getattr(config, "OPENROUTER_TIMEOUT_SEC", 120.0))
+    max_retries = int(getattr(config, "OPENROUTER_MAX_RETRIES", 3))
+    structured_output = bool(getattr(config, "OPENROUTER_USE_STRUCTURED_OUTPUT", True))
+
+    if not api_key:
+        logger.error("OPENROUTER_API_KEY is empty")
+        return None, None
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/video-stats-bot",
+        "X-Title": "Video Stats Bot",
+    }
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": FUNNEL_SCREENSHOT_USER_PROMPT}]
+    for img_bytes in images_list:
+        b64_str = base64.b64encode(img_bytes).decode("utf-8")
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{b64_str}"},
+            }
+        )
+
+    messages = [
+        {"role": "system", "content": FUNNEL_SCREENSHOT_SYSTEM_PROMPT},
+        {"role": "user", "content": content},
+    ]
+
+    result, raw_text = _run_ai_step(
+        step_name="funnel_screenshots",
+        model=model,
+        headers=headers,
+        messages=messages,
+        schema_name="funnel_screenshot_batch",
+        schema=FUNNEL_SCREENSHOT_SCHEMA,
+        validator=_validate_funnel_screenshot_result,
+        timeout_sec=timeout_sec,
+        max_retries=max_retries,
+        structured_output=structured_output,
+    )
+    if isinstance(result, dict) and result.get("error") == "api_auth_failed":
+        return result, raw_text
+    if not result:
+        return None, raw_text
+    return result, raw_text
 
 
 def analyze_screenshot(
