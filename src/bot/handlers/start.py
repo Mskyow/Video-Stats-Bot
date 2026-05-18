@@ -31,7 +31,10 @@ def main_actions_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📄 Как импортировать CSV", callback_data="help_csv"),
             ],
             [
+                InlineKeyboardButton(text="📊 Воронка по скринам", callback_data="help_funnel_screens"),
                 InlineKeyboardButton(text="⚙️ Режим 2/3 скрина", callback_data="help_mode"),
+            ],
+            [
                 InlineKeyboardButton(text="🔌 API / Sources", callback_data="help_sources"),
             ],
         ]
@@ -70,12 +73,14 @@ START_TEXT = (
     "<b>Что делает бот:</b>\n"
     "• <b>Скрины роликов</b> -> лист <b>Video Analysis</b>\n"
     "• <b>CSV воронки</b> -> лист <b>Marketing Funnels</b>\n"
+    "• <b>Скрины воронки</b> -> полу-ручное обновление <b>Marketing Funnels</b>\n"
     "• <b>API / Sources</b> -> проверка готовности App Store и Google Play\n\n"
     "<b>Быстрый старт:</b>\n"
     "1. Для скринов: <code>/upload</code>\n"
-    "2. Для CSV: <code>/import_csv</code>\n"
-    "3. Для API-источников: <code>/sources</code>\n"
-    "4. Выйти из режима скринов: <code>/done</code>\n\n"
+    "2. Для воронки по скринам: <code>/upload_funnel</code>\n"
+    "3. Для CSV: <code>/import_csv</code>\n"
+    "4. Для API-источников: <code>/sources</code>\n"
+    "5. Выйти из режима скринов: <code>/done</code>\n\n"
     "<b>Остальные команды:</b>\n"
     "/stats, /day_stats, /all_stats, /help, /sync_funnels"
 )
@@ -87,6 +92,10 @@ HELP_TEXT = (
     "2. Отправь скрины статистики\n"
     "3. <code>/done</code>\n"
     "Результат: запись в <b>Video Analysis</b> и обновление viral views в <b>Marketing Funnels</b>.\n\n"
+    "<b>Скрины воронки</b>\n"
+    "1. <code>/upload_funnel</code>\n"
+    "2. Отправь дневные скрины App Store / Google Play / Adapty\n"
+    "Результат: бот с помощью AI распознаёт значения и обновляет <b>Marketing Funnels</b>.\n\n"
     "<b>CSV для воронки</b>\n"
     "1. <code>/import_csv</code>\n"
     "2. Отправь CSV в личку боту\n"
@@ -111,6 +120,20 @@ CSV_QUICK_HELP_TEXT = (
     "2. Отправь CSV-файл в личку боту\n\n"
     "Лист: <b>Marketing Funnels</b>\n"
     "Ключ обновления: <code>Date + Channel + Store</code>"
+)
+
+FUNNEL_SCREENSHOTS_HELP_TEXT = (
+    "📊 <b>Воронка по скринам</b>\n\n"
+    "Бот будет <b>с помощью AI</b> распознавать числа со скринов и обновлять лист <b>Marketing Funnels</b>.\n\n"
+    "<b>План батча на 1 день:</b>\n"
+    "1. App Store — Search Impressions\n"
+    "2. App Store — Product Page Views\n"
+    "3. App Store — Installs\n"
+    "4. Google Play — Product Page Views\n"
+    "5. Google Play — Installs\n"
+    "6. Adapty — Purchases (все сторы)\n\n"
+    "Пока это <b>вход во flow</b> и инструкция по формату. Сам OCR-режим воронки будет подключён следующим шагом.\n"
+    "Команда входа: <code>/upload_funnel</code>"
 )
 
 MODE_HELP_TEXT = (
@@ -171,7 +194,10 @@ async def cmd_help(message: Message) -> None:
                 InlineKeyboardButton(text="📄 CSV", callback_data="help_csv"),
             ],
             [
+                InlineKeyboardButton(text="📊 Воронка-скрины", callback_data="help_funnel_screens"),
                 InlineKeyboardButton(text="⚙️ Режим 2/3", callback_data="help_mode"),
+            ],
+            [
                 InlineKeyboardButton(text="🔌 API / Sources", callback_data="help_sources"),
             ],
             [
@@ -185,18 +211,25 @@ async def cmd_help(message: Message) -> None:
     await message.answer(HELP_TEXT, reply_markup=keyboard)
 
 
-@router.callback_query(lambda c: c.data in ("help_screens", "help_csv", "help_mode", "help_sources"))
+@router.callback_query(lambda c: c.data in ("help_screens", "help_csv", "help_funnel_screens", "help_mode", "help_sources"))
 async def cb_quick_help(callback: CallbackQuery) -> None:
     if callback.data == "help_screens":
         text = SCREENSHOTS_HELP_TEXT
     elif callback.data == "help_csv":
         text = CSV_QUICK_HELP_TEXT
+    elif callback.data == "help_funnel_screens":
+        text = FUNNEL_SCREENSHOTS_HELP_TEXT
     elif callback.data == "help_sources":
         text = SOURCES_HELP_TEXT
     else:
         text = MODE_HELP_TEXT
     await callback.message.answer(text)
     await callback.answer()
+
+
+@router.message(Command("upload_funnel"))
+async def cmd_upload_funnel(message: Message) -> None:
+    await message.answer(FUNNEL_SCREENSHOTS_HELP_TEXT)
 
 
 @router.message(Command("mode"))

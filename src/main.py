@@ -53,6 +53,7 @@ async def setup_bot_commands(bot: Bot) -> None:
     commands = [
         BotCommand(command="start", description="Главное меню"),
         BotCommand(command="upload", description="Загрузить скрины роликов"),
+        BotCommand(command="upload_funnel", description="Воронка по скринам"),
         BotCommand(command="import_csv", description="Импортировать CSV воронки"),
         BotCommand(command="chat_info", description="Показать chat_id и topic_id"),
         BotCommand(command="sources", description="Статус App Store / Google Play"),
