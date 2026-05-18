@@ -153,13 +153,14 @@ class TestVideoAnalysisRows:
         assert row[2] == sample_ai_response_video["video_title"]
         assert row[4] == "video"
         assert row[5] == "15000"
-        assert row[6] == "45"
-        assert row[7] == "30"
-        assert row[8] == "72.5%"
-        assert row[9] == "8.5"
-        assert row[10] == "65%"
-        assert row[12] == "7.8"
-        assert "SCALE" in row[13]
+        assert row[6] == "1200"
+        assert row[7] == "45"
+        assert row[8] == "30"
+        assert row[9] == "72.5%"
+        assert row[10] == "8.5"
+        assert row[11] == "65%"
+        assert row[13] == "7.8"
+        assert "SCALE" in row[14]
 
     def test_build_video_analysis_row_youtube_single_screenshot_views_only(self):
         row = _build_row(
@@ -171,7 +172,8 @@ class TestVideoAnalysisRows:
                 "source_image_count": 1,
                 "metrics": {
                     "views": 1234,
-                    "comments": None,
+                    "likes": 5,
+                    "comments": 1,
                     "shares": None,
                     "retention_3s": None,
                     "avg_watch_time_sec": None,
@@ -183,14 +185,15 @@ class TestVideoAnalysisRows:
         )
         assert row[1] == "YouTube"
         assert row[5] == "1234"
-        assert row[6] == ""
-        assert row[7] == ""
+        assert row[6] == "5"
+        assert row[7] == "1"
         assert row[8] == ""
         assert row[9] == ""
         assert row[10] == ""
         assert row[11] == ""
         assert row[12] == ""
         assert row[13] == ""
+        assert row[14] == ""
 
     def test_calculate_age_hours_with_prefix(self):
         age = _calculate_age_hours("Posted on Feb 6, 2026, 12:53 PM")

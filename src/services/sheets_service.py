@@ -42,6 +42,7 @@ VIDEO_ANALYSIS_COLUMNS = [
     "Posted At",
     "Content Type",
     "Views",
+    "Likes",
     "Comments",
     "Shares",
     "Retention",
@@ -457,6 +458,7 @@ def _extract_video_title(video_data: dict[str, Any]) -> str:
 def _build_video_analysis_row(video_data: dict[str, Any]) -> list[str]:
     metrics = video_data.get("metrics") or {}
     views = metrics.get("views")
+    likes = metrics.get("likes")
     comments = metrics.get("comments")
     shares = metrics.get("shares")
     posted_at = video_data.get("posted_at")
@@ -496,7 +498,8 @@ def _build_video_analysis_row(video_data: dict[str, Any]) -> list[str]:
         _format_posted_at_for_sheet(posted_at),
         str(video_data.get("content_type") or "-"),
         _format_number(views),
-        "" if is_youtube_views_only else _format_number(comments),
+        _format_number(likes),
+        _format_number(comments),
         "" if is_youtube_views_only else _format_number(shares),
         "" if is_youtube_views_only else _format_percentage(retention),
         "" if is_youtube_views_only else _format_seconds(avg_watch_time_sec),
