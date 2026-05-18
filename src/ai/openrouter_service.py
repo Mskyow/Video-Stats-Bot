@@ -188,10 +188,10 @@ EXTRACTION_SYSTEM_PROMPT = (
 
 EXTRACTION_USER_PROMPT = """Extract factual analytics fields from the provided screenshots.
 
-Input contains:
-1) Overview metrics screenshot
-2) Retention screenshot
-(Optional) 3) If you receive exactly 3 screenshots, the 3rd is the "retention after semantic ending" screen.
+Input can contain:
+1) One screenshot only. In this case, treat it as a single-video analytics screenshot. This is especially valid for YouTube/YouTube Shorts when only views are visible.
+2) Two screenshots: Overview metrics screenshot + Retention screenshot.
+3) Exactly three screenshots: the 3rd is the "retention after semantic ending" screen.
 
 If you receive exactly 3 screenshots, you must extract the 'retention after semantic ending' metric from the 3rd screenshot. Here is exactly where to find it and how it looks: Look under the black timeline, in the 'Retention Rate' section at the bottom left. You are looking for a value in the format 0:0X (Y%). For example, if you see 0:06 (10%), it means at the 6th second, the retention is 10%. If you see 0:07 (9%), it means at the 7th second, the retention is 9%. You must extract BOTH the second (the X value) and the percentage (the Y value).
 
@@ -201,8 +201,8 @@ Rules:
 - Extract numbers as numbers whenever possible.
 - If value is not visible, return null.
 - Follow this order exactly:
-  1) Consistency check (same video on both screenshots).
-  2) Platform detection (TikTok vs Instagram/Reels UI).
+  1) Consistency check. If there is only one screenshot, skip mismatch detection and analyze that single screenshot.
+  2) Platform detection (TikTok vs Instagram/Reels vs YouTube/YouTube Shorts UI).
   3) Content type detection (video/carousel).
   4) posted_at extraction (platform-specific rules below).
   5) Engagement counters extraction (views, likes, comments, shares, saves).
@@ -211,10 +211,15 @@ Rules:
 - posted_at extraction rules:
   - TikTok: use the full string under thumbnail starting with "Posted on ...", e.g. "Posted on Feb 6, 2026, 12:51 PM".
   - Instagram/Reels: use the plain date under thumbnail as shown, e.g. "February 6".
+  - YouTube/YouTube Shorts: copy the visible upload/publish date text if present. If it is not visible, return null.
   - Do not convert or reformat dates; copy visible text exactly.
 - Extract engagement counters from the same metrics block: likes, comments, shares, saves.
 - Keep each metric in its own field; never merge shares/saves into one value.
 - If one of engagement counters is not visible, set only that field to null (do not null all metrics).
+- For YouTube/YouTube Shorts views-only screenshots:
+  - views is the only mandatory metric to extract when that is all that is visible;
+  - leave likes, comments, shares, saves, retention_3s, completion_rate, avg_watch_time_pct as null if they are not visible;
+  - do not invent retention or watch-time metrics from a single screenshot.
 - For `hook_type`, use only: short|medium|long (based on hook_text word count).
 - For video retention graph, estimate `retention_3s` from the curve at ~3 seconds when exact value is not printed.
 - If retention graph is visible, avoid leaving `retention_3s` null.
@@ -920,8 +925,12 @@ def _normalize_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
 
     integer_metrics = ("views", "likes", "comments", "shares", "saves")
     for key in integer_metrics:
-        value = _to_float(source.get(key))
-        normalized[key] = int(round(value)) if value is not None and value >= 0 else 0
+        raw_value = source.get(key)
+        value = _to_float(raw_value)
+        if raw_value is None:
+            normalized[key] = None
+        else:
+            normalized[key] = int(round(value)) if value is not None and value >= 0 else 0
 
     bounded_percent_metrics = ("retention_3s", "completion_rate", "viewed_pct", "end_retention_pct")
     for key in bounded_percent_metrics:

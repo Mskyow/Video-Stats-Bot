@@ -104,11 +104,12 @@ async def handle_photo(
     chunk_size = get_screenshots_mode(supabase, user_id) if supabase and user_id else "2"
     chunk_size = int(chunk_size)
 
-    # Строгая проверка: число фото должно быть кратно chunk_size
+    # Строгая проверка: число фото должно быть кратно chunk_size.
+    # Special case: allow a single screenshot upload for YouTube views-only flow.
     n = len(messages)
     if n == 0:
         return
-    if n % chunk_size != 0:
+    if n != 1 and n % chunk_size != 0:
         if chunk_size == 2:
             await message.answer(
                 "⚠️ <b>Режим «2 скриншота»</b>\n\n"
@@ -123,11 +124,12 @@ async def handle_photo(
             )
         return
 
-    # 1. Сортировка и строгое разбиение на группы по chunk_size (только полные группы)
+    # 1. Сортировка и разбиение на группы.
     messages.sort(key=lambda m: m.message_id)
+    effective_chunk_size = 1 if n == 1 else chunk_size
     groups: list[list[Message]] = [
-        list(messages[i : i + chunk_size])
-        for i in range(0, len(messages), chunk_size)
+        list(messages[i : i + effective_chunk_size])
+        for i in range(0, len(messages), effective_chunk_size)
     ]
     total_videos = len(groups)
 
@@ -136,14 +138,14 @@ async def handle_photo(
         "Start batch processing id=%s user_id=%s chunk=%s groups=%s",
         batch_id,
         user_id,
-        chunk_size,
+        effective_chunk_size,
         len(groups),
     )
 
     # Отправляем сообщение о начале обработки
     processing_msg = await message.answer(
         f"⏳ <b>Начинаю обработку...</b>\n"
-        f"Видео в очереди: {len(groups)} (режим: {chunk_size} скриншота)\n"
+        f"Видео в очереди: {len(groups)} (режим: {effective_chunk_size} скриншота)\n"
         f"Одновременно обрабатываю: до {MAX_CONCURRENT_ANALYSIS}\n"
         f"⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️ 0%"
     )
@@ -422,6 +424,7 @@ async def process_single_video(
                 )
 
             # Успешный анализ
+            result_json["source_image_count"] = len(messages)
             title = result_json.get("video_title") or f"Video #{index}"
             score = float(result_json.get("score", 0))
 

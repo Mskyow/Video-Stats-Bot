@@ -161,6 +161,37 @@ class TestVideoAnalysisRows:
         assert row[12] == "7.8"
         assert "SCALE" in row[13]
 
+    def test_build_video_analysis_row_youtube_single_screenshot_views_only(self):
+        row = _build_row(
+            {
+                "platform": "youtube",
+                "video_title": "YouTube Test",
+                "posted_at": "May 18, 2026",
+                "content_type": "video",
+                "source_image_count": 1,
+                "metrics": {
+                    "views": 1234,
+                    "comments": None,
+                    "shares": None,
+                    "retention_3s": None,
+                    "avg_watch_time_sec": None,
+                    "avg_watch_time_pct": None,
+                },
+                "score": 6.0,
+                "verdict": "🟡 ITERATE",
+            }
+        )
+        assert row[1] == "YouTube"
+        assert row[5] == "1234"
+        assert row[6] == ""
+        assert row[7] == ""
+        assert row[8] == ""
+        assert row[9] == ""
+        assert row[10] == ""
+        assert row[11] == ""
+        assert row[12] == ""
+        assert row[13] == ""
+
     def test_calculate_age_hours_with_prefix(self):
         age = _calculate_age_hours("Posted on Feb 6, 2026, 12:53 PM")
         assert age is not None

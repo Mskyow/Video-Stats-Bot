@@ -187,6 +187,23 @@ def test_normalize_metrics_end_retention_3_screenshot_mode() -> None:
     assert normalized_null.get("end_retention_pct") is None
 
 
+def test_normalize_metrics_preserves_missing_social_counters() -> None:
+    normalized = _normalize_metrics(
+        {
+            "views": 100,
+            "likes": None,
+            "comments": None,
+            "shares": None,
+            "saves": None,
+        }
+    )
+    assert normalized["views"] == 100
+    assert normalized["likes"] is None
+    assert normalized["comments"] is None
+    assert normalized["shares"] is None
+    assert normalized["saves"] is None
+
+
 def test_score_guardrail_caps_zero_social_actions() -> None:
     extracted = {
         "video_title": "Test",

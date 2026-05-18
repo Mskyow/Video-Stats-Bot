@@ -483,21 +483,27 @@ def _build_video_analysis_row(video_data: dict[str, Any]) -> list[str]:
             _parse_int(views),
         )
 
+    platform = _normalize_platform(video_data.get("platform"))
+    is_youtube_views_only = (
+        platform == "YouTube"
+        and int(video_data.get("source_image_count") or 0) == 1
+    )
+
     return [
         recorded_at,
-        _normalize_platform(video_data.get("platform")),
+        platform,
         _extract_video_title(video_data),
         _format_posted_at_for_sheet(posted_at),
         str(video_data.get("content_type") or "-"),
         _format_number(views),
-        _format_number(comments),
-        _format_number(shares),
-        _format_percentage(retention),
-        _format_seconds(avg_watch_time_sec),
-        _format_percentage(avg_watch_time),
-        _format_percentage(er),
-        _format_number(video_data.get("score")),
-        _normalize_verdict_for_sheet(video_data.get("verdict")),
+        "" if is_youtube_views_only else _format_number(comments),
+        "" if is_youtube_views_only else _format_number(shares),
+        "" if is_youtube_views_only else _format_percentage(retention),
+        "" if is_youtube_views_only else _format_seconds(avg_watch_time_sec),
+        "" if is_youtube_views_only else _format_percentage(avg_watch_time),
+        "" if is_youtube_views_only else _format_percentage(er),
+        "" if is_youtube_views_only else _format_number(video_data.get("score")),
+        "" if is_youtube_views_only else _normalize_verdict_for_sheet(video_data.get("verdict")),
     ]
 
 
