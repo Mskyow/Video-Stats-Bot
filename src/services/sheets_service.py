@@ -383,6 +383,17 @@ def _format_seconds(value: Any) -> str:
     return f"{numeric:.2f}".rstrip("0").rstrip(".")
 
 
+def _to_float_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        if isinstance(value, str):
+            return float(value.strip().replace("%", "").replace(",", "."))
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _parse_int(value: Any) -> int:
     if value in (None, ""):
         return 0
@@ -463,27 +474,49 @@ def _build_video_analysis_row(video_data: dict[str, Any]) -> list[str]:
     shares = metrics.get("shares")
     posted_at = video_data.get("posted_at")
     recorded_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    retention = metrics.get("retention_3s") or video_data.get("retention_3s")
-    avg_watch_time = metrics.get("avg_watch_time_pct") or video_data.get("avg_watch_time_pct")
-    avg_watch_time_sec = metrics.get("avg_watch_time_sec") or video_data.get("avg_watch_time_sec")
+    raw_retention = metrics.get("retention_3s", video_data.get("retention_3s"))
+    raw_avg_watch_time_pct = metrics.get("avg_watch_time_pct", video_data.get("avg_watch_time_pct"))
+    raw_avg_watch_time_sec = metrics.get("avg_watch_time_sec", video_data.get("avg_watch_time_sec"))
+    video_duration_sec = _to_float_or_none(metrics.get("video_duration_sec") or video_data.get("video_duration_sec"))
+
+    retention = _to_float_or_none(raw_retention)
+    avg_watch_time = _to_float_or_none(raw_avg_watch_time_pct)
+    avg_watch_time_sec = _to_float_or_none(raw_avg_watch_time_sec)
+
+    # Reels/TikTok OCR can sometimes swap:
+    # - retention percent into avg_watch_time_sec as "70%"
+    # - average watch time seconds into avg_watch_time_pct as "3"
+    raw_sec_text = str(raw_avg_watch_time_sec or "")
+    if "%" in raw_sec_text:
+        sec_percent = _to_float_or_none(raw_avg_watch_time_sec)
+        if sec_percent is not None and (retention is None or retention <= 0):
+            retention = sec_percent
+        avg_watch_time_sec = None
+        if (
+            avg_watch_time is not None
+            and video_duration_sec is not None
+            and avg_watch_time <= video_duration_sec * 3
+        ):
+            avg_watch_time_sec = avg_watch_time
+            avg_watch_time = (avg_watch_time_sec / video_duration_sec) * 100.0
+
     if avg_watch_time_sec is None:
-        video_duration_sec = metrics.get("video_duration_sec") or video_data.get("video_duration_sec")
         try:
             if avg_watch_time is not None and video_duration_sec is not None:
                 avg_watch_time_sec = float(video_duration_sec) * float(avg_watch_time) / 100.0
         except (TypeError, ValueError):
             avg_watch_time_sec = None
-    er = video_data.get("aggregated_er")
-    if er is None:
-        er = _calculate_er(
-            {
-                "likes": metrics.get("likes") or 0,
-                "comments": comments or 0,
-                "shares": shares or 0,
-                "saves": metrics.get("saves") or 0,
-            },
-            _parse_int(views),
-        )
+
+    # Engagement rate should always be derived from raw counters, not trusted from model text.
+    er = _calculate_er(
+        {
+            "likes": metrics.get("likes") or 0,
+            "comments": comments or 0,
+            "shares": shares or 0,
+            "saves": metrics.get("saves") or 0,
+        },
+        _parse_int(views),
+    )
 
     platform = _normalize_platform(video_data.get("platform"))
     is_youtube_views_only = (
