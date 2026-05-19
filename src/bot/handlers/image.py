@@ -20,6 +20,8 @@ from src.config import (
     GOOGLE_SHEET_ID,
     MAX_CONCURRENT_ANALYSIS,
     TG_FILE_DOWNLOAD_TIMEOUT_SEC,
+    VIDEO_ANALYSIS_AI_TIMEOUT_SEC,
+    VIDEO_ANALYSIS_DB_TIMEOUT_SEC,
 )
 from src.db.repositories.users import get_screenshots_mode
 from src.db.repositories.videos import insert_video
@@ -211,12 +213,15 @@ async def handle_photo(
                 # 1. Попытка сохранения в Supabase
                 if supabase and user_id:
                     try:
-                        insert_res = await asyncio.to_thread(
-                            insert_video,
-                            supabase,
-                            user_id,
-                            res.ai_result,
-                            res.raw_response,
+                        insert_res = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                insert_video,
+                                supabase,
+                                user_id,
+                                res.ai_result,
+                                res.raw_response,
+                            ),
+                            timeout=VIDEO_ANALYSIS_DB_TIMEOUT_SEC,
                         )
                         
                         if insert_res and insert_res.get("duplicate"):
@@ -384,10 +389,13 @@ async def process_single_video(
             images_bytes = await asyncio.gather(*[download(p.file_id) for p in photos])
 
             # AI Анализ (в треде, т.к. requests синхронный)
-            result_json, raw_response = await asyncio.to_thread(
-                analyze_screenshot,
-                list(images_bytes),
-                mime_type="image/jpeg",
+            result_json, raw_response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    analyze_screenshot,
+                    list(images_bytes),
+                    mime_type="image/jpeg",
+                ),
+                timeout=VIDEO_ANALYSIS_AI_TIMEOUT_SEC,
             )
 
             if not result_json:

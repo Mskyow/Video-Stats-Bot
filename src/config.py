@@ -117,6 +117,13 @@ AI_QUALITY_LOG_EVERY_N: int = max(1, _get_int_optional("AI_QUALITY_LOG_EVERY_N",
 TG_FILE_DOWNLOAD_TIMEOUT_SEC: float = max(
     1.0, _get_float_optional("TG_FILE_DOWNLOAD_TIMEOUT_SEC", 20.0)
 )
+# Верхние таймауты для полного анализа одной группы скринов и записи в БД.
+VIDEO_ANALYSIS_AI_TIMEOUT_SEC: float = max(
+    10.0, _get_float_optional("VIDEO_ANALYSIS_AI_TIMEOUT_SEC", 90.0)
+)
+VIDEO_ANALYSIS_DB_TIMEOUT_SEC: float = max(
+    5.0, _get_float_optional("VIDEO_ANALYSIS_DB_TIMEOUT_SEC", 20.0)
+)
 # Задержка между записями в таблицу (секунды)
 SHEETS_WRITE_DELAY: float = 1.2
 
