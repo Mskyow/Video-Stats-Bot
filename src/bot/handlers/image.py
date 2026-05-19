@@ -72,7 +72,7 @@ def _format_processing_exception(exc: Exception) -> str:
     return "⚠️ Непредвиденная ошибка обработки. Повтори попытку."
 
 
-@router.message(F.photo)
+@router.message(UploadMode.active, F.photo)
 async def handle_photo(
     message: Message,
     bot: Bot,
@@ -91,17 +91,6 @@ async def handle_photo(
     """
     # Обрабатываем скриншоты только в личке и только после явного /upload.
     if message.chat.type != "private":
-        return
-
-    current_state = await state.get_state()
-    if current_state != UploadMode.active.state:
-        logger.info(
-            "Ignoring photo outside upload mode: user_id=%s chat_type=%s state=%s message_id=%s",
-            message.from_user.id if message.from_user else None,
-            message.chat.type,
-            current_state,
-            message.message_id,
-        )
         return
 
     # Если middleware не передал album, используем само сообщение как список из 1

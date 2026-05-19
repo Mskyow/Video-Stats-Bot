@@ -144,7 +144,7 @@ def _build_success_text(
     return "\n".join(lines)
 
 
-@router.message(F.photo)
+@router.message(FunnelUploadMode.active, F.photo)
 async def handle_funnel_photo(
     message: Message,
     bot: Bot,
@@ -152,10 +152,6 @@ async def handle_funnel_photo(
     album: list[Message] | None = None,
 ) -> None:
     if message.chat.type != "private":
-        return
-
-    current_state = await state.get_state()
-    if current_state != FunnelUploadMode.active.state:
         return
 
     incoming_messages = album or [message]
