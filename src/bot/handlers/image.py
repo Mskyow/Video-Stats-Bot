@@ -95,11 +95,25 @@ async def handle_photo(
 
     current_state = await state.get_state()
     if current_state != UploadMode.active.state:
+        logger.info(
+            "Ignoring photo outside upload mode: user_id=%s chat_type=%s state=%s message_id=%s",
+            message.from_user.id if message.from_user else None,
+            message.chat.type,
+            current_state,
+            message.message_id,
+        )
         return
 
     # Если middleware не передал album, используем само сообщение как список из 1
     messages = album or [message]
     user_id = message.from_user.id if message.from_user else 0
+    logger.info(
+        "Photo batch received: user_id=%s message_id=%s media_group_id=%s count=%s",
+        user_id,
+        message.message_id,
+        message.media_group_id,
+        len(messages),
+    )
 
     # Режим: строго 2 или 3 скриншота на одно видео (берём из БД до любой обработки)
     supabase = get_supabase()
@@ -110,8 +124,16 @@ async def handle_photo(
     # Special case: allow a single screenshot upload for YouTube views-only flow.
     n = len(messages)
     if n == 0:
+        logger.warning("Empty photo batch: user_id=%s message_id=%s", user_id, message.message_id)
         return
     if n != 1 and n % chunk_size != 0:
+        logger.info(
+            "Rejected batch by count: user_id=%s message_id=%s count=%s chunk_size=%s",
+            user_id,
+            message.message_id,
+            n,
+            chunk_size,
+        )
         if chunk_size == 2:
             await message.answer(
                 "⚠️ <b>Режим «2 скриншота»</b>\n\n"
@@ -213,6 +235,12 @@ async def handle_photo(
                 # 1. Попытка сохранения в Supabase
                 if supabase and user_id:
                     try:
+                        logger.info(
+                            "Saving video to DB batch_id=%s video_index=%s title=%s",
+                            batch_id,
+                            res.index,
+                            res.video_title,
+                        )
                         insert_res = await asyncio.wait_for(
                             asyncio.to_thread(
                                 insert_video,
@@ -222,6 +250,12 @@ async def handle_photo(
                                 res.raw_response,
                             ),
                             timeout=VIDEO_ANALYSIS_DB_TIMEOUT_SEC,
+                        )
+                        logger.info(
+                            "DB save finished batch_id=%s video_index=%s result=%s",
+                            batch_id,
+                            res.index,
+                            "duplicate" if insert_res and insert_res.get("duplicate") else bool(insert_res),
                         )
                         
                         if insert_res and insert_res.get("duplicate"):
@@ -260,6 +294,11 @@ async def handle_photo(
                         try:
                             if res.raw_response:
                                 res.ai_result["raw_response"] = res.raw_response
+                            logger.info(
+                                "Queueing Google Sheets export batch_id=%s video_index=%s",
+                                batch_id,
+                                res.index,
+                            )
                             queue_export(res.ai_result)
                         except Exception as e:
                             logger.exception(
@@ -295,6 +334,14 @@ async def handle_photo(
     # Итого: total = saved + duplicates + failed
     
     report_text = build_summary_report(results, saved_count, failed_count, duplicate_count)
+    logger.info(
+        "Built batch report id=%s user_id=%s saved=%s duplicates=%s failed=%s",
+        batch_id,
+        user_id,
+        saved_count,
+        duplicate_count,
+        failed_count,
+    )
 
     # Кнопки
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
@@ -343,6 +390,7 @@ async def process_single_video(
     """
     try:
         async with VIDEO_ANALYSIS_SEMAPHORE:
+            started_at = asyncio.get_running_loop().time()
             logger.debug(
                 "Processing video batch_id=%s index=%s message_ids=%s",
                 batch_id,
@@ -386,9 +434,22 @@ async def process_single_video(
                     raise
 
             # Конкурентная загрузка всех фото группы (2 или 3)
+            logger.info(
+                "Downloading screenshots batch_id=%s index=%s count=%s",
+                batch_id,
+                index,
+                len(photos),
+            )
             images_bytes = await asyncio.gather(*[download(p.file_id) for p in photos])
+            logger.info(
+                "Downloaded screenshots batch_id=%s index=%s bytes=%s",
+                batch_id,
+                index,
+                [len(img) for img in images_bytes],
+            )
 
             # AI Анализ (в треде, т.к. requests синхронный)
+            logger.info("Starting AI analysis batch_id=%s index=%s", batch_id, index)
             result_json, raw_response = await asyncio.wait_for(
                 asyncio.to_thread(
                     analyze_screenshot,
@@ -397,8 +458,16 @@ async def process_single_video(
                 ),
                 timeout=VIDEO_ANALYSIS_AI_TIMEOUT_SEC,
             )
+            logger.info(
+                "AI analysis finished batch_id=%s index=%s success=%s elapsed_sec=%.2f",
+                batch_id,
+                index,
+                bool(result_json),
+                asyncio.get_running_loop().time() - started_at,
+            )
 
             if not result_json:
+                logger.warning("AI returned empty result batch_id=%s index=%s", batch_id, index)
                 return VideoProcessingResult(
                     index=index,
                     success=False,
@@ -410,6 +479,7 @@ async def process_single_video(
 
             # Ошибка авторизации OpenRouter (401) — неверный/просроченный API ключ
             if result_json.get("error") == "api_auth_failed":
+                logger.error("AI auth failed batch_id=%s index=%s", batch_id, index)
                 return VideoProcessingResult(
                     index=index,
                     success=False,
@@ -421,6 +491,7 @@ async def process_single_video(
 
             # Проверка на несоответствие контента (разные видео в скриншотах)
             if result_json.get("error") == "content_mismatch":
+                logger.info("AI content mismatch batch_id=%s index=%s reason=%s", batch_id, index, result_json.get("reason"))
                 reason = result_json.get("reason", "Неизвестная причина")
                 return VideoProcessingResult(
                     index=index,
@@ -448,6 +519,15 @@ async def process_single_video(
             elif "SCALE" in verdict:
                 rating_label = "Scale"
 
+            logger.info(
+                "Video analysis success batch_id=%s index=%s title=%s score=%s verdict=%s total_elapsed_sec=%.2f",
+                batch_id,
+                index,
+                title,
+                score,
+                verdict,
+                asyncio.get_running_loop().time() - started_at,
+            )
             return VideoProcessingResult(
                 index=index,
                 success=True,
