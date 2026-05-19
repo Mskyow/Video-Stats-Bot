@@ -22,7 +22,8 @@ VIDEO_UPLOAD_MODE_TEXT = (
     "<b>Что делать:</b>\n"
     "• отправляй скрины статистики роликов\n"
     "• по умолчанию: пара <b>Overview + Retention</b>\n"
-    "• можно отправлять несколько роликов подряд\n\n"
+    "• можно отправить <b>альбомом сразу</b> или <b>по одному сообщению подряд</b>\n"
+    "• бот начнёт анализ только когда соберётся полная пара/тройка\n\n"
     "Когда закончишь — <code>/done</code>"
 )
 
@@ -84,6 +85,7 @@ async def cmd_upload(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     await state.set_state(UploadMode.active)
+    await state.update_data(pending_video_photo_ids=[])
     await message.answer(VIDEO_UPLOAD_MODE_TEXT, reply_markup=keyboard)
 
 

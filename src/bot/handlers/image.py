@@ -31,6 +31,7 @@ from src.services.sheets_service import queue_export
 router = Router(name="image")
 logger = logging.getLogger(__name__)
 VIDEO_ANALYSIS_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_ANALYSIS)
+PENDING_PHOTO_IDS_KEY = "pending_video_photo_ids"
 
 
 @dataclass
@@ -109,13 +110,47 @@ async def handle_photo(
     chunk_size = get_screenshots_mode(supabase, user_id) if supabase and user_id else "2"
     chunk_size = int(chunk_size)
 
-    # Строгая проверка: число фото должно быть кратно chunk_size.
-    # Special case: allow a single screenshot upload for YouTube views-only flow.
     n = len(messages)
     if n == 0:
         logger.warning("Empty photo batch: user_id=%s message_id=%s", user_id, message.message_id)
         return
-    if n != 1 and n % chunk_size != 0:
+
+    # Single screenshots sent as separate messages are buffered until the full pair/triple is ready.
+    if message.media_group_id is None and n == 1:
+        current_data = await state.get_data()
+        pending_photo_ids = list(current_data.get(PENDING_PHOTO_IDS_KEY) or [])
+        pending_photo_ids.append(messages[0].photo[-1].file_id)
+        await state.update_data(**{PENDING_PHOTO_IDS_KEY: pending_photo_ids})
+
+        if len(pending_photo_ids) < chunk_size:
+            await message.answer(
+                f"📥 Скриншоты сохранены: <b>{len(pending_photo_ids)}/{chunk_size}</b>\n"
+                f"Пришли ещё {chunk_size - len(pending_photo_ids)} скриншот(а), и я начну анализ."
+            )
+            return
+
+        if len(pending_photo_ids) > chunk_size:
+            await state.update_data(**{PENDING_PHOTO_IDS_KEY: []})
+            await message.answer(
+                "⚠️ В очереди оказалось больше скриншотов, чем нужно на одно видео.\n\n"
+                "Я сбросил локальную очередь. Начни заново: отправь ровно "
+                f"{chunk_size} скриншота на одно видео."
+            )
+            return
+
+        file_id_groups = [pending_photo_ids]
+        await state.update_data(**{PENDING_PHOTO_IDS_KEY: []})
+        await _run_batch_processing(
+            message=message,
+            bot=bot,
+            file_id_groups=file_id_groups,
+            user_id=user_id,
+            effective_chunk_size=chunk_size,
+        )
+        return
+
+    # Albums must contain a whole number of videos.
+    if n % chunk_size != 0:
         logger.info(
             "Rejected batch by count: user_id=%s message_id=%s count=%s chunk_size=%s",
             user_id,
@@ -137,223 +172,17 @@ async def handle_photo(
             )
         return
 
-    # 1. Сортировка и разбиение на группы.
     messages.sort(key=lambda m: m.message_id)
-    effective_chunk_size = 1 if n == 1 else chunk_size
-    groups: list[list[Message]] = [
-        list(messages[i : i + effective_chunk_size])
-        for i in range(0, len(messages), effective_chunk_size)
+    file_id_groups: list[list[str]] = [
+        [msg.photo[-1].file_id for msg in messages[i : i + chunk_size]]
+        for i in range(0, len(messages), chunk_size)
     ]
-    total_videos = len(groups)
-
-    batch_id = f"{user_id or 'unknown'}:{message.message_id}"
-    logger.info(
-        "Start batch processing id=%s user_id=%s chunk=%s groups=%s",
-        batch_id,
-        user_id,
-        effective_chunk_size,
-        len(groups),
-    )
-
-    # Отправляем сообщение о начале обработки
-    processing_msg = await message.answer(
-        f"⏳ <b>Начинаю обработку...</b>\n"
-        f"Видео в очереди: {len(groups)} (режим: {effective_chunk_size} скриншота)\n"
-        f"Одновременно обрабатываю: до {MAX_CONCURRENT_ANALYSIS}\n"
-        f"⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️ 0%"
-    )
-
-    # 2. Параллельная обработка (The Engine)
-    tasks = []
-    
-    # Создаем shared counter для прогресса
-    progress_counter = {"processed": 0, "total": len(groups)}
-    
-    async def update_progress():
-        progress_counter["processed"] += 1
-        processed = progress_counter["processed"]
-        total = progress_counter["total"]
-        percent = int((processed / total) * 100)
-        
-        try:
-            bar_len = 10
-            filled = int(bar_len * processed / total)
-            # Красивый прогресс бар
-            bar = "🟩" * filled + "⬜️" * (bar_len - filled)
-            
-            await processing_msg.edit_text(
-                f"⏳ <b>Обработка видео...</b>\n"
-                f"Готово: {processed} из {total}\n"
-                f"{bar} {percent}%"
-            )
-        except Exception:
-            pass
-
-    for idx, group in enumerate(groups, start=1):
-        async def task_wrapper(i, msgs, b):
-            res = await process_single_video(i, msgs, b, batch_id=batch_id)
-            await update_progress()
-            return res
-        tasks.append(task_wrapper(idx, group, bot))
-
-    results: list[VideoProcessingResult] = []
-    if tasks:
-        processed_results = await asyncio.gather(*tasks, return_exceptions=True)
-        for res in processed_results:
-            if isinstance(res, VideoProcessingResult):
-                results.append(res)
-            elif isinstance(res, Exception):
-                logger.error("Critical error in worker task batch_id=%s: %s", batch_id, res)
-                results.append(VideoProcessingResult(index=0, success=False, error_message=str(res)))
-
-    results.sort(key=lambda r: r.index)
-
-    # 3. Сохранение данных (Fault Tolerance: сохраняем то, что успешно)
-    saved_count = 0
-    failed_count = 0
-    duplicate_count = 0
-    
-    supabase = get_supabase()
-
-    for res in results:
-        if res.success and res.ai_result:
-            is_duplicate = False
-            try:
-                db_saved = False
-
-                # 1. Попытка сохранения в Supabase
-                if supabase and user_id:
-                    try:
-                        logger.info(
-                            "Saving video to DB batch_id=%s video_index=%s title=%s",
-                            batch_id,
-                            res.index,
-                            res.video_title,
-                        )
-                        insert_res = await asyncio.wait_for(
-                            asyncio.to_thread(
-                                insert_video,
-                                supabase,
-                                user_id,
-                                res.ai_result,
-                                res.raw_response,
-                            ),
-                            timeout=VIDEO_ANALYSIS_DB_TIMEOUT_SEC,
-                        )
-                        logger.info(
-                            "DB save finished batch_id=%s video_index=%s result=%s",
-                            batch_id,
-                            res.index,
-                            "duplicate" if insert_res and insert_res.get("duplicate") else bool(insert_res),
-                        )
-                        
-                        if insert_res and insert_res.get("duplicate"):
-                            is_duplicate = True
-                            res.error_message = "♻️ Дубликат (уже сохранено)"
-                            duplicate_count += 1
-                        elif insert_res:
-                            db_saved = True
-                        else:
-                            res.success = False
-                            res.error_message = "⚠️ Ошибка сохранения в базу данных"
-                            failed_count += 1
-                            logger.error(
-                                "DB insert returned empty result batch_id=%s video_index=%s",
-                                batch_id,
-                                res.index,
-                            )
-                    except Exception as e:
-                        logger.exception(
-                            "Failed to save video to Supabase batch_id=%s video_index=%s: %s",
-                            batch_id,
-                            res.index,
-                            e,
-                        )
-                        res.success = False
-                        res.error_message = "⚠️ Ошибка сохранения в базу данных"
-                        failed_count += 1
-                else:
-                    db_saved = True
-
-                if db_saved and not is_duplicate:
-                    saved_count += 1
-
-                    # 2. Экспорт в Google Sheets (fire-and-forget через очередь)
-                    if GOOGLE_SHEET_ID:
-                        try:
-                            if res.raw_response:
-                                res.ai_result["raw_response"] = res.raw_response
-                            logger.info(
-                                "Queueing Google Sheets export batch_id=%s video_index=%s",
-                                batch_id,
-                                res.index,
-                            )
-                            queue_export(res.ai_result)
-                        except Exception as e:
-                            logger.exception(
-                                "Failed to queue Google Sheets export batch_id=%s video_index=%s: %s",
-                                batch_id,
-                                res.index,
-                                e,
-                            )
-                
-            except Exception as e:
-                logger.exception(
-                    "Failed to process post-AI result batch_id=%s video_index=%s: %s",
-                    batch_id,
-                    res.index,
-                    e,
-                )
-                if not is_duplicate:
-                    res.success = False
-                    if not res.error_message:
-                        res.error_message = "⚠️ Ошибка пост-обработки результата"
-                    failed_count += 1
-        else:
-            failed_count += 1
-
-    # 4. Формирование отчета (UX)
-    # Считаем реальные ошибки (failed_count включает в себя и дубликаты, если они не сохранены)
-    # Но в нашей логике выше: если дубликат, мы делаем duplicate_count += 1, и НЕ делаем saved_count += 1
-    # failed_count инкрементится только если res.success == False.
-    # Значит, дубликаты (у которых res.success=True, но error_message="Дубликат") не попадают в failed_count.
-    # Проверим логику выше:
-    # if res.success: -> check duplicate -> duplicate_count++ OR saved_count++
-    # else: failed_count++
-    # Итого: total = saved + duplicates + failed
-    
-    report_text = build_summary_report(results, saved_count, failed_count, duplicate_count)
-    logger.info(
-        "Built batch report id=%s user_id=%s saved=%s duplicates=%s failed=%s",
-        batch_id,
-        user_id,
-        saved_count,
-        duplicate_count,
-        failed_count,
-    )
-
-    # Кнопки
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-    buttons = []
-    
-    if GOOGLE_SHEET_ID:
-        url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}"
-        buttons.append(InlineKeyboardButton(text="📊 Открыть таблицу", url=url))
-        
-    buttons.append(InlineKeyboardButton(text="✅ Закрыть режим скринов", callback_data="exit_upload_mode"))
-    # Располагаем кнопки вертикально
-    for btn in buttons:
-        keyboard.inline_keyboard.append([btn])
-
-    await processing_msg.edit_text(report_text, reply_markup=keyboard)
-    logger.info(
-        "Finished batch id=%s user_id=%s total=%s saved=%s duplicates=%s failed=%s",
-        batch_id,
-        user_id,
-        len(results),
-        saved_count,
-        duplicate_count,
-        failed_count,
+    await _run_batch_processing(
+        message=message,
+        bot=bot,
+        file_id_groups=file_id_groups,
+        user_id=user_id,
+        effective_chunk_size=chunk_size,
     )
 
 @router.callback_query(F.data == "exit_upload_mode")
@@ -534,6 +363,339 @@ async def process_single_video(
             success=False,
             error_message=_format_processing_exception(e),
         )
+
+
+async def process_single_video_by_file_ids(
+    index: int,
+    file_ids: list[str],
+    bot: Bot,
+    batch_id: str | None = None,
+) -> VideoProcessingResult:
+    try:
+        async with VIDEO_ANALYSIS_SEMAPHORE:
+            started_at = asyncio.get_running_loop().time()
+
+            async def download(file_id: str) -> bytes:
+                try:
+                    file_info = await asyncio.wait_for(
+                        bot.get_file(file_id), timeout=TG_FILE_DOWNLOAD_TIMEOUT_SEC
+                    )
+                    if not file_info.file_path:
+                        raise ValueError("No file path")
+                    downloaded = await asyncio.wait_for(
+                        bot.download_file(file_info.file_path),
+                        timeout=TG_FILE_DOWNLOAD_TIMEOUT_SEC,
+                    )
+                    if downloaded is None:
+                        raise ValueError("Empty response")
+                    if hasattr(downloaded, "read"):
+                        raw_data = await asyncio.wait_for(
+                            asyncio.to_thread(downloaded.read),
+                            timeout=TG_FILE_DOWNLOAD_TIMEOUT_SEC,
+                        )
+                    else:
+                        raw_data = downloaded
+                    return raw_data if isinstance(raw_data, bytes) else bytes(raw_data)
+                except asyncio.TimeoutError as exc:
+                    raise TimeoutError(
+                        f"тайм-аут скачивания файла Telegram ({TG_FILE_DOWNLOAD_TIMEOUT_SEC:.0f}с)"
+                    ) from exc
+                except TelegramNetworkError:
+                    raise
+
+            logger.info(
+                "Downloading screenshots batch_id=%s index=%s count=%s",
+                batch_id,
+                index,
+                len(file_ids),
+            )
+            images_bytes = await asyncio.gather(*[download(file_id) for file_id in file_ids])
+            logger.info(
+                "Downloaded screenshots batch_id=%s index=%s bytes=%s",
+                batch_id,
+                index,
+                [len(img) for img in images_bytes],
+            )
+
+            logger.info("Starting AI analysis batch_id=%s index=%s", batch_id, index)
+            result_json, raw_response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    analyze_screenshot,
+                    list(images_bytes),
+                    mime_type="image/jpeg",
+                ),
+                timeout=VIDEO_ANALYSIS_AI_TIMEOUT_SEC,
+            )
+            logger.info(
+                "AI analysis finished batch_id=%s index=%s success=%s elapsed_sec=%.2f",
+                batch_id,
+                index,
+                bool(result_json),
+                asyncio.get_running_loop().time() - started_at,
+            )
+
+            if not result_json:
+                logger.warning("AI returned empty result batch_id=%s index=%s", batch_id, index)
+                return VideoProcessingResult(
+                    index=index,
+                    success=False,
+                    error_message=(
+                        "⚠️ AI не смог распознать метрики. "
+                        "Проверь, что на скриншотах четко видны цифры, и отправь скриншоты повторно."
+                    ),
+                )
+
+            if result_json.get("error") == "api_auth_failed":
+                logger.error("AI auth failed batch_id=%s index=%s", batch_id, index)
+                return VideoProcessingResult(
+                    index=index,
+                    success=False,
+                    error_message=(
+                        "⚠️ Ошибка доступа к AI (OpenRouter). "
+                        "Проверьте API ключ OPENROUTER_API_KEY в настройках бота."
+                    ),
+                )
+
+            if result_json.get("error") == "content_mismatch":
+                logger.info("AI content mismatch batch_id=%s index=%s reason=%s", batch_id, index, result_json.get("reason"))
+                reason = result_json.get("reason", "Неизвестная причина")
+                return VideoProcessingResult(
+                    index=index,
+                    success=False,
+                    error_message=(
+                        "⛔️ Скриншоты не совпадают: похоже, это разные видео. "
+                        f"Причина: {reason}"
+                    ),
+                )
+
+            result_json["source_image_count"] = len(file_ids)
+            title = result_json.get("video_title") or f"Video #{index}"
+            score = float(result_json.get("score", 0))
+            verdict = result_json.get("verdict", "")
+            rating_label = "N/A"
+            if "KILL" in verdict:
+                rating_label = "Kill"
+            elif "FIX" in verdict:
+                rating_label = "Fix"
+            elif "ITERATE" in verdict:
+                rating_label = "Iterate"
+            elif "SCALE" in verdict:
+                rating_label = "Scale"
+
+            logger.info(
+                "Video analysis success batch_id=%s index=%s title=%s score=%s verdict=%s total_elapsed_sec=%.2f",
+                batch_id,
+                index,
+                title,
+                score,
+                verdict,
+                asyncio.get_running_loop().time() - started_at,
+            )
+            return VideoProcessingResult(
+                index=index,
+                success=True,
+                video_title=title,
+                score=score,
+                rating_label=rating_label,
+                ai_result=result_json,
+                raw_response=raw_response,
+            )
+    except Exception as e:
+        logger.exception("Error processing video batch_id=%s index=%s: %s", batch_id, index, e)
+        return VideoProcessingResult(
+            index=index,
+            success=False,
+            error_message=_format_processing_exception(e),
+        )
+
+
+async def _run_batch_processing(
+    *,
+    message: Message,
+    bot: Bot,
+    file_id_groups: list[list[str]],
+    user_id: int,
+    effective_chunk_size: int,
+) -> None:
+    batch_id = f"{user_id or 'unknown'}:{message.message_id}"
+    logger.info(
+        "Start batch processing id=%s user_id=%s chunk=%s groups=%s",
+        batch_id,
+        user_id,
+        effective_chunk_size,
+        len(file_id_groups),
+    )
+
+    processing_msg = await message.answer(
+        f"⏳ <b>Начинаю обработку...</b>\n"
+        f"Видео в очереди: {len(file_id_groups)} (режим: {effective_chunk_size} скриншота)\n"
+        f"Одновременно обрабатываю: до {MAX_CONCURRENT_ANALYSIS}\n"
+        f"⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️ 0%"
+    )
+
+    tasks = []
+    progress_counter = {"processed": 0, "total": len(file_id_groups)}
+
+    async def update_progress():
+        progress_counter["processed"] += 1
+        processed = progress_counter["processed"]
+        total = progress_counter["total"]
+        percent = int((processed / total) * 100)
+        try:
+            bar_len = 10
+            filled = int(bar_len * processed / total)
+            bar = "🟩" * filled + "⬜️" * (bar_len - filled)
+            await processing_msg.edit_text(
+                f"⏳ <b>Обработка видео...</b>\n"
+                f"Готово: {processed} из {total}\n"
+                f"{bar} {percent}%"
+            )
+        except Exception:
+            pass
+
+    for idx, file_ids in enumerate(file_id_groups, start=1):
+        async def task_wrapper(i: int, ids: list[str], b: Bot):
+            res = await process_single_video_by_file_ids(i, ids, b, batch_id=batch_id)
+            await update_progress()
+            return res
+        tasks.append(task_wrapper(idx, file_ids, bot))
+
+    results: list[VideoProcessingResult] = []
+    processed_results = await asyncio.gather(*tasks, return_exceptions=True)
+    for res in processed_results:
+        if isinstance(res, VideoProcessingResult):
+            results.append(res)
+        elif isinstance(res, Exception):
+            logger.error("Critical error in worker task batch_id=%s: %s", batch_id, res)
+            results.append(VideoProcessingResult(index=0, success=False, error_message=str(res)))
+
+    results.sort(key=lambda r: r.index)
+
+    saved_count = 0
+    failed_count = 0
+    duplicate_count = 0
+    supabase = get_supabase()
+
+    for res in results:
+        if res.success and res.ai_result:
+            is_duplicate = False
+            try:
+                db_saved = False
+                if supabase and user_id:
+                    try:
+                        logger.info(
+                            "Saving video to DB batch_id=%s video_index=%s title=%s",
+                            batch_id,
+                            res.index,
+                            res.video_title,
+                        )
+                        insert_res = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                insert_video,
+                                supabase,
+                                user_id,
+                                res.ai_result,
+                                res.raw_response,
+                            ),
+                            timeout=VIDEO_ANALYSIS_DB_TIMEOUT_SEC,
+                        )
+                        logger.info(
+                            "DB save finished batch_id=%s video_index=%s result=%s",
+                            batch_id,
+                            res.index,
+                            "duplicate" if insert_res and insert_res.get("duplicate") else bool(insert_res),
+                        )
+                        if insert_res and insert_res.get("duplicate"):
+                            is_duplicate = True
+                            res.error_message = "♻️ Дубликат (уже сохранено)"
+                            duplicate_count += 1
+                        elif insert_res:
+                            db_saved = True
+                        else:
+                            res.success = False
+                            res.error_message = "⚠️ Ошибка сохранения в базу данных"
+                            failed_count += 1
+                            logger.error(
+                                "DB insert returned empty result batch_id=%s video_index=%s",
+                                batch_id,
+                                res.index,
+                            )
+                    except Exception as e:
+                        logger.exception(
+                            "Failed to save video to Supabase batch_id=%s video_index=%s: %s",
+                            batch_id,
+                            res.index,
+                            e,
+                        )
+                        res.success = False
+                        res.error_message = "⚠️ Ошибка сохранения в базу данных"
+                        failed_count += 1
+                else:
+                    db_saved = True
+
+                if db_saved and not is_duplicate:
+                    saved_count += 1
+                    if GOOGLE_SHEET_ID:
+                        try:
+                            if res.raw_response:
+                                res.ai_result["raw_response"] = res.raw_response
+                            logger.info(
+                                "Queueing Google Sheets export batch_id=%s video_index=%s",
+                                batch_id,
+                                res.index,
+                            )
+                            queue_export(res.ai_result)
+                        except Exception as e:
+                            logger.exception(
+                                "Failed to queue Google Sheets export batch_id=%s video_index=%s: %s",
+                                batch_id,
+                                res.index,
+                                e,
+                            )
+            except Exception as e:
+                logger.exception(
+                    "Failed to process post-AI result batch_id=%s video_index=%s: %s",
+                    batch_id,
+                    res.index,
+                    e,
+                )
+                if not is_duplicate:
+                    res.success = False
+                    if not res.error_message:
+                        res.error_message = "⚠️ Ошибка пост-обработки результата"
+                    failed_count += 1
+        else:
+            failed_count += 1
+
+    report_text = build_summary_report(results, saved_count, failed_count, duplicate_count)
+    logger.info(
+        "Built batch report id=%s user_id=%s saved=%s duplicates=%s failed=%s",
+        batch_id,
+        user_id,
+        saved_count,
+        duplicate_count,
+        failed_count,
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+    buttons = []
+    if GOOGLE_SHEET_ID:
+        url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}"
+        buttons.append(InlineKeyboardButton(text="📊 Открыть таблицу", url=url))
+    buttons.append(InlineKeyboardButton(text="✅ Закрыть режим скринов", callback_data="exit_upload_mode"))
+    for btn in buttons:
+        keyboard.inline_keyboard.append([btn])
+
+    await processing_msg.edit_text(report_text, reply_markup=keyboard)
+    logger.info(
+        "Finished batch id=%s user_id=%s total=%s saved=%s duplicates=%s failed=%s",
+        batch_id,
+        user_id,
+        len(results),
+        saved_count,
+        duplicate_count,
+        failed_count,
+    )
 
 
 def build_summary_report(results: list[VideoProcessingResult], saved: int, failed: int, duplicates: int) -> str:
