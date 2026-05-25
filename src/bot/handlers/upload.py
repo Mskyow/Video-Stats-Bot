@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from src.bot.handlers.start import screenshots_mode_keyboard
-from src.bot.states import FunnelUploadMode, UploadMode
+from src.bot.states import FunnelUploadMode, UploadMode, YouTubeUploadMode
 from src.db.repositories.users import get_screenshots_mode, is_user_authorized
 from src.db.supabase_client import get_supabase
 
@@ -17,13 +17,24 @@ router = Router(name="upload")
 
 
 VIDEO_UPLOAD_MODE_TEXT = (
-    "📸 <b>Режим скринов включён</b>\n\n"
+    "📸 <b>Загрузка TikTok / Instagram включена</b>\n\n"
     "Сейчас бот ждёт скрины для листа <b>Video Analysis</b>.\n\n"
-    "<b>Что делать:</b>\n"
-    "• отправляй скрины статистики роликов\n"
-    "• по умолчанию: пара <b>Overview + Retention</b>\n"
-    "• можно отправить <b>альбомом сразу</b> или <b>по одному сообщению подряд</b>\n"
-    "• бот начнёт анализ только когда соберётся полная пара/тройка\n\n"
+    "<b>Как загружать удобно:</b>\n"
+    "• отправляй скрины TikTok и Instagram в правильном порядке\n"
+    "• стандартно: <b>2 скрина на одно видео</b> — Overview + Retention\n"
+    "• можно отправить <b>одним альбомом сразу много фото</b>\n"
+    "• бот режет пачку подряд: 1-2, 3-4, 5-6 и так далее\n"
+    "• если нужен режим 3 скринов, переключи его кнопкой ниже\n\n"
+    "Когда закончишь — <code>/done</code>"
+)
+
+YOUTUBE_UPLOAD_MODE_TEXT = (
+    "▶️ <b>Загрузка YouTube включена</b>\n\n"
+    "Сейчас бот ждёт скрины для листа <b>Video Analysis</b>.\n\n"
+    "<b>Как загружать удобно:</b>\n"
+    "• <b>1 скрин = 1 видео</b>\n"
+    "• можно отправить один скрин или сразу много одним альбомом\n"
+    "• каждый скрин будет обработан как отдельное видео\n\n"
     "Когда закончишь — <code>/done</code>"
 )
 
@@ -43,14 +54,16 @@ FUNNEL_UPLOAD_MODE_TEXT = (
 
 DONE_TEXT = (
     "✅ <b>Режим загрузки выключен</b>\n\n"
-    "Для роликов: <code>/upload</code>\n"
-    "Для воронки: <code>/upload_funnel</code>"
+    "TikTok / Instagram: <code>/upload</code>\n"
+    "YouTube: <code>/upload_youtube</code>\n"
+    "Воронка: <code>/upload_funnel</code>"
 )
 
 NOT_ACTIVE_TEXT = (
     "ℹ️ Сейчас ни один режим загрузки не активен.\n\n"
-    "Для роликов: <code>/upload</code>\n"
-    "Для воронки: <code>/upload_funnel</code>"
+    "TikTok / Instagram: <code>/upload</code>\n"
+    "YouTube: <code>/upload_youtube</code>\n"
+    "Воронка: <code>/upload_funnel</code>"
 )
 
 NOT_AUTHORIZED_TEXT = (
@@ -61,7 +74,11 @@ NOT_AUTHORIZED_TEXT = (
 
 
 def _is_any_upload_state(current_state: str | None) -> bool:
-    return current_state in {UploadMode.active.state, FunnelUploadMode.active.state}
+    return current_state in {
+        UploadMode.active.state,
+        YouTubeUploadMode.active.state,
+        FunnelUploadMode.active.state,
+    }
 
 
 @router.message(Command("upload"))
@@ -80,13 +97,44 @@ async def cmd_upload(message: Message, state: FSMContext) -> None:
     keyboard = screenshots_mode_keyboard(current_mode)
     current_state = await state.get_state()
     if current_state == UploadMode.active.state:
-        await message.answer("📸 Режим скринов уже включён.", reply_markup=keyboard)
+        await message.answer("📸 Режим загрузки TikTok / Instagram уже включён.", reply_markup=keyboard)
         return
 
     await state.clear()
     await state.set_state(UploadMode.active)
-    await state.update_data(pending_video_photo_ids=[])
+    await state.update_data(
+        pending_video_photo_ids=[],
+        upload_chunk_size=current_mode,
+        upload_flow="tiktok_instagram",
+    )
     await message.answer(VIDEO_UPLOAD_MODE_TEXT, reply_markup=keyboard)
+
+
+@router.message(Command("upload_youtube"))
+async def cmd_upload_youtube(message: Message, state: FSMContext) -> None:
+    user = message.from_user
+    if not user:
+        await message.answer("Не удалось определить пользователя.")
+        return
+
+    supabase = get_supabase()
+    if not is_user_authorized(supabase, user.id):
+        await message.answer(NOT_AUTHORIZED_TEXT)
+        return
+
+    current_state = await state.get_state()
+    if current_state == YouTubeUploadMode.active.state:
+        await message.answer("▶️ Режим загрузки YouTube уже включён.")
+        return
+
+    await state.clear()
+    await state.set_state(YouTubeUploadMode.active)
+    await state.update_data(
+        pending_video_photo_ids=[],
+        upload_chunk_size="1",
+        upload_flow="youtube",
+    )
+    await message.answer(YOUTUBE_UPLOAD_MODE_TEXT)
 
 
 @router.message(Command("done"))
@@ -101,6 +149,7 @@ async def cmd_done(message: Message, state: FSMContext) -> None:
 
 
 @router.message(UploadMode.active, ~F.photo, ~F.document)
+@router.message(YouTubeUploadMode.active, ~F.photo, ~F.document)
 async def handle_non_photo_in_upload_mode(message: Message) -> None:
     await message.answer(
         "📸 Сейчас я жду только скрины статистики роликов.\n\n"

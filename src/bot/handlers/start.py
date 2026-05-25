@@ -10,8 +10,8 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from src.bot.states import FunnelUploadMode
 from src import config
+from src.bot.states import FunnelUploadMode, UploadMode, YouTubeUploadMode
 from src.db.repositories.users import (
     authorize_user,
     get_or_create_user,
@@ -29,14 +29,15 @@ def main_actions_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="📸 Как загрузить скрины", callback_data="help_screens"),
-                InlineKeyboardButton(text="📄 Как импортировать CSV", callback_data="help_csv"),
+                InlineKeyboardButton(text="📸 TikTok / Instagram", callback_data="start_video_upload"),
+                InlineKeyboardButton(text="▶️ YouTube", callback_data="start_youtube_upload"),
             ],
             [
                 InlineKeyboardButton(text="📊 Воронка по скринам", callback_data="start_funnel_upload"),
-                InlineKeyboardButton(text="⚙️ Режим 2/3 скрина", callback_data="help_mode"),
+                InlineKeyboardButton(text="📄 Импорт CSV", callback_data="help_csv"),
             ],
             [
+                InlineKeyboardButton(text="⚙️ Режим 2/3 скрина", callback_data="help_mode"),
                 InlineKeyboardButton(text="🔌 API / Sources", callback_data="help_sources"),
             ],
         ]
@@ -56,11 +57,11 @@ def screenshots_mode_keyboard(current: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="📸 2 скриншота" + (" ✓" if current == "2" else ""),
+                    text="📸 2 скрина" + (" ✓" if current == "2" else ""),
                     callback_data="mode_2",
                 ),
                 InlineKeyboardButton(
-                    text="📸 3 скриншота" + (" ✓" if current == "3" else ""),
+                    text="📸 3 скрина" + (" ✓" if current == "3" else ""),
                     callback_data="mode_3",
                 ),
             ],
@@ -70,57 +71,78 @@ def screenshots_mode_keyboard(current: str) -> InlineKeyboardMarkup:
 
 WELCOME_UNAUTHORIZED_TEXT = (
     "👋 <b>Привет!</b>\n\n"
-    "Я помогаю вести две вещи:\n"
-    "• разбор роликов по скринам\n"
-    "• обновление маркетинговой воронки по CSV и API-источникам\n\n"
-    "🔐 Для доступа введи:\n"
-    "<code>/start КОДОВОЕ_СЛОВО</code>\n\n"
-    "Кодовое слово узнай у администратора."
+    "Бот помогает:\n"
+    "• загружать скрины видео в <b>Video Analysis</b>\n"
+    "• обновлять <b>Marketing Funnels</b> через скрины, CSV и API-источники\n\n"
+    "Для доступа введи:\n"
+    "<code>/start КОДОВОЕ_СЛОВО</code>"
 )
 
 START_TEXT = (
     "👋 <b>Creator Copilot</b>\n\n"
-    "<b>Что делает бот:</b>\n"
-    "• <b>Скрины роликов</b> -> лист <b>Video Analysis</b>\n"
-    "• <b>CSV воронки</b> -> лист <b>Marketing Funnels</b>\n"
-    "• <b>Скрины воронки</b> -> полу-ручное обновление <b>Marketing Funnels</b>\n"
-    "• <b>API / Sources</b> -> проверка готовности App Store и Google Play\n\n"
+    "<b>Что умеет бот:</b>\n"
+    "• TikTok / Instagram скрины → <b>Video Analysis</b>\n"
+    "• YouTube скрины → <b>Video Analysis</b>\n"
+    "• CSV воронки → <b>Marketing Funnels</b>\n"
+    "• Скрины воронки → <b>Marketing Funnels</b>\n"
+    "• API / Sources → проверка готовности App Store и Google Play\n\n"
     "<b>Быстрый старт:</b>\n"
-    "1. Для скринов: <code>/upload</code>\n"
-    "2. Для воронки по скринам: <code>/upload_funnel</code>\n"
-    "3. Для CSV: <code>/import_csv</code>\n"
-    "4. Для API-источников: <code>/sources</code>\n"
-    "5. Выйти из режима скринов: <code>/done</code>\n\n"
+    "1. TikTok / Instagram: <code>/upload</code>\n"
+    "2. YouTube: <code>/upload_youtube</code>\n"
+    "3. Скрины воронки: <code>/upload_funnel</code>\n"
+    "4. CSV: <code>/import_csv</code>\n"
+    "5. Завершить режим загрузки: <code>/done</code>\n\n"
     "<b>Остальные команды:</b>\n"
     "/stats, /day_stats, /all_stats, /help, /sync_funnels"
 )
 
 HELP_TEXT = (
     "<b>Как пользоваться ботом</b>\n\n"
-    "<b>Скрины роликов</b>\n"
-    "1. <code>/upload</code>\n"
-    "2. Отправь скрины статистики\n"
-    "3. <code>/done</code>\n"
-    "Результат: запись в <b>Video Analysis</b> и обновление viral views в <b>Marketing Funnels</b>.\n\n"
+    "<b>TikTok / Instagram</b>\n"
+    "1. Нажми <code>/upload</code>\n"
+    "2. Отправь скрины в правильном порядке\n"
+    "3. Обычно это 2 скрина на одно видео: Overview + Retention\n"
+    "4. Можно отправить сразу много фото одним альбомом\n"
+    "5. Бот режет их подряд на пары\n\n"
+    "<b>YouTube</b>\n"
+    "1. Нажми <code>/upload_youtube</code>\n"
+    "2. Отправь один или несколько YouTube-скринов\n"
+    "3. Каждый скрин = отдельное видео\n\n"
     "<b>Скрины воронки</b>\n"
-    "1. <code>/upload_funnel</code>\n"
-    "2. Отправь дневные скрины App Store / Google Play / Adapty\n"
-    "Результат: бот с помощью AI распознаёт значения и обновляет <b>Marketing Funnels</b>.\n\n"
+    "1. Нажми <code>/upload_funnel</code>\n"
+    "2. Отправь 6 скринов за один день\n"
+    "3. Бот распознает значения и обновит <b>Marketing Funnels</b>\n\n"
     "<b>CSV для воронки</b>\n"
-    "1. <code>/import_csv</code>\n"
+    "1. Нажми <code>/import_csv</code>\n"
     "2. Отправь CSV в личку боту\n"
-    "Результат: upsert строк в <b>Marketing Funnels</b> по ключу Date + Channel + Store.\n\n"
-    "<b>API / Sources</b>\n"
-    "1. <code>/sources</code> — проверить готовность App Store / Google Play\n"
-    "2. <code>/sync_funnels</code> — посмотреть текущий статус автосбора\n\n"
-    "👇 <b>Полезные материалы:</b>"
+    "3. Бот сделает upsert по ключу <code>Date + Channel + Store</code>"
 )
 
 SCREENSHOTS_HELP_TEXT = (
-    "📸 <b>Скрины роликов</b>\n\n"
+    "📸 <b>TikTok / Instagram</b>\n\n"
+    "Идеальный сценарий:\n"
     "1. Нажми <code>/upload</code>\n"
-    "2. Отправляй скрины статистики роликов\n"
-    "3. Когда закончил — <code>/done</code>\n\n"
+    "2. Открой галерею\n"
+    "3. Выбери скрины в правильном порядке\n"
+    "4. Отправь их одним альбомом\n\n"
+    "Важно:\n"
+    "• 2 скрина = 1 видео\n"
+    "• порядок внутри альбома критичен\n"
+    "• бот разобьёт пачку как 1-2, 3-4, 5-6 и так далее\n\n"
+    "Лист: <b>Video Analysis</b>"
+)
+
+YOUTUBE_HELP_TEXT = (
+    "▶️ <b>YouTube</b>\n\n"
+    "Идеальный сценарий:\n"
+    "1. Нажми <code>/upload_youtube</code>\n"
+    "2. Открой галерею\n"
+    "3. Выбери один или несколько YouTube-скринов\n"
+    "4. Отправь их одним альбомом или по одному\n\n"
+    "Важно:\n"
+    "• 1 скрин = 1 видео\n"
+    "• можно грузить сразу пачку\n"
+    "• бот обработает каждый скрин отдельно\n\n"
     "Лист: <b>Video Analysis</b>"
 )
 
@@ -134,29 +156,29 @@ CSV_QUICK_HELP_TEXT = (
 
 FUNNEL_SCREENSHOTS_HELP_TEXT = (
     "📊 <b>Воронка по скринам</b>\n\n"
-    "Бот будет <b>с помощью AI</b> распознавать числа со скринов и обновлять лист <b>Marketing Funnels</b>.\n\n"
-    "<b>План батча на 1 день:</b>\n"
+    "Бот распознаёт значения со скринов и обновляет лист <b>Marketing Funnels</b>.\n\n"
+    "<b>Порядок батча на 1 день:</b>\n"
     "1. App Store — Search Impressions\n"
     "2. App Store — Product Page Views\n"
     "3. App Store — Installs\n"
     "4. Google Play — Product Page Views\n"
     "5. Google Play — Installs\n"
-    "6. Adapty — Purchases (все сторы)\n\n"
-    "Команда входа: <code>/upload_funnel</code>\n"
-    "Бот ждёт ровно 6 скринов за один день и после шестого сам запускает AI-распознавание."
+    "6. Adapty — Purchases (all stores)\n\n"
+    "Команда входа: <code>/upload_funnel</code>"
 )
 
 MODE_HELP_TEXT = (
-    "⚙️ <b>Режим скринов</b>\n\n"
-    "<b>2 скрина</b> — Overview + Retention\n"
-    "<b>3 скрина</b> — если нужен ещё retention-after-core\n\n"
-    "Сменить режим: <code>/mode</code>"
+    "⚙️ <b>Режим 2/3 скрина</b>\n\n"
+    "<b>2 скрина</b> — стандартный сценарий для TikTok / Instagram: Overview + Retention\n"
+    "<b>3 скрина</b> — если нужен дополнительный retention-after-core\n\n"
+    "Команда: <code>/mode</code>\n"
+    "Этот режим не влияет на YouTube. Для YouTube всегда используется 1 скрин на видео."
 )
 
 SOURCES_HELP_TEXT = (
     "🔌 <b>API / Sources</b>\n\n"
     "Команда <code>/sources</code> показывает, готовы ли App Store Connect и Google Play.\n"
-    "Команда <code>/sync_funnels</code> показывает текущий статус автосбора.\n\n"
+    "Команда <code>/sync_funnels</code> показывает текущий статус автосбора воронки.\n\n"
     "Если источник ещё не подключён, CSV остаётся fallback-вариантом."
 )
 
@@ -200,14 +222,15 @@ async def cmd_help(message: Message) -> None:
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="📸 Скрины", callback_data="help_screens"),
+                InlineKeyboardButton(text="📸 TikTok / Instagram", callback_data="help_screens"),
+                InlineKeyboardButton(text="▶️ YouTube", callback_data="help_youtube"),
+            ],
+            [
+                InlineKeyboardButton(text="📊 Воронка", callback_data="help_funnel_screens"),
                 InlineKeyboardButton(text="📄 CSV", callback_data="help_csv"),
             ],
             [
-                InlineKeyboardButton(text="📊 Воронка-скрины", callback_data="help_funnel_screens"),
                 InlineKeyboardButton(text="⚙️ Режим 2/3", callback_data="help_mode"),
-            ],
-            [
                 InlineKeyboardButton(text="🔌 API / Sources", callback_data="help_sources"),
             ],
             [
@@ -221,10 +244,21 @@ async def cmd_help(message: Message) -> None:
     await message.answer(HELP_TEXT, reply_markup=keyboard)
 
 
-@router.callback_query(lambda c: c.data in ("help_screens", "help_csv", "help_funnel_screens", "help_mode", "help_sources"))
+@router.callback_query(
+    lambda c: c.data in (
+        "help_screens",
+        "help_youtube",
+        "help_csv",
+        "help_funnel_screens",
+        "help_mode",
+        "help_sources",
+    )
+)
 async def cb_quick_help(callback: CallbackQuery) -> None:
     if callback.data == "help_screens":
         text = SCREENSHOTS_HELP_TEXT
+    elif callback.data == "help_youtube":
+        text = YOUTUBE_HELP_TEXT
     elif callback.data == "help_csv":
         text = CSV_QUICK_HELP_TEXT
     elif callback.data == "help_funnel_screens":
@@ -236,6 +270,40 @@ async def cb_quick_help(callback: CallbackQuery) -> None:
     if callback.message:
         await callback.message.answer(text, reply_markup=help_back_keyboard())
     await callback.answer("Открыто")
+
+
+@router.callback_query(lambda c: c.data == "start_video_upload")
+async def cb_start_video_upload(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = callback.from_user.id if callback.from_user else 0
+    supabase = get_supabase()
+    current = get_screenshots_mode(supabase, user_id) if supabase and user_id else "2"
+    await state.clear()
+    await state.set_state(UploadMode.active)
+    await state.update_data(
+        pending_video_photo_ids=[],
+        upload_chunk_size=current,
+        upload_flow="tiktok_instagram",
+    )
+    if callback.message:
+        await callback.message.answer(
+            SCREENSHOTS_HELP_TEXT,
+            reply_markup=screenshots_mode_keyboard(current),
+        )
+    await callback.answer("Режим TikTok / Instagram включён")
+
+
+@router.callback_query(lambda c: c.data == "start_youtube_upload")
+async def cb_start_youtube_upload(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(YouTubeUploadMode.active)
+    await state.update_data(
+        pending_video_photo_ids=[],
+        upload_chunk_size="1",
+        upload_flow="youtube",
+    )
+    if callback.message:
+        await callback.message.answer(YOUTUBE_HELP_TEXT, reply_markup=help_back_keyboard())
+    await callback.answer("Режим YouTube включён")
 
 
 @router.callback_query(lambda c: c.data == "start_funnel_upload")
@@ -274,15 +342,15 @@ async def cmd_mode(message: Message) -> None:
         await message.answer("БД недоступна.")
         return
     current = get_screenshots_mode(supabase, user_id)
-    label = "2 скриншота (Обзор + Удержание)" if current == "2" else "3 скриншота"
+    label = "2 скрина (Overview + Retention)" if current == "2" else "3 скрина"
     await message.answer(
-        f"📸 <b>Режим скриншотов</b>\n\nСейчас: <b>{label}</b>\n\nВыбери режим:",
+        f"📸 <b>Режим TikTok / Instagram</b>\n\nСейчас: <b>{label}</b>\n\nВыбери режим:",
         reply_markup=screenshots_mode_keyboard(current),
     )
 
 
 @router.callback_query(lambda c: c.data in ("mode_2", "mode_3"))
-async def cb_screenshots_mode(callback: CallbackQuery) -> None:
+async def cb_screenshots_mode(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id if callback.from_user else 0
     if not user_id:
         await callback.answer("Ошибка: пользователь не определён.")
@@ -296,7 +364,10 @@ async def cb_screenshots_mode(callback: CallbackQuery) -> None:
     if not ok:
         await callback.answer("Не удалось сохранить режим.")
         return
-    label = "2 скриншота (Обзор + Удержание)" if target == "2" else "3 скриншота"
+    current_state = await state.get_state()
+    if current_state == UploadMode.active.state:
+        await state.update_data(upload_chunk_size=target)
+    label = "2 скрина (Overview + Retention)" if target == "2" else "3 скрина"
     await callback.answer(f"Режим переключён на {label}")
     try:
         if callback.message:
@@ -315,6 +386,8 @@ def _normalize_platform_for_stats(raw_platform: str) -> str:
         return "TikTok"
     if "reels" in p or "instagram" in p:
         return "Instagram"
+    if "youtube" in p or "shorts" in p:
+        return "YouTube"
     return raw_platform or "Другое"
 
 
@@ -360,7 +433,7 @@ async def cmd_stats(message: Message) -> None:
         "📱 <b>По платформам:</b>",
     ]
 
-    for platform_name in ("TikTok", "Instagram", "Другое"):
+    for platform_name in ("TikTok", "Instagram", "YouTube", "Другое"):
         count = platform_counts.get(platform_name, 0)
         if count > 0:
             lines.append(f"   • {platform_name}: <b>{count}</b>")

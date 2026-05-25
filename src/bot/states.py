@@ -8,5 +8,9 @@ class UploadMode(StatesGroup):
     active = State()
 
 
+class YouTubeUploadMode(StatesGroup):
+    active = State()
+
+
 class FunnelUploadMode(StatesGroup):
     active = State()

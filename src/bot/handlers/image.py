@@ -15,7 +15,7 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.fsm.context import FSMContext
 
 from src.ai.openrouter_service import analyze_screenshot
-from src.bot.states import UploadMode
+from src.bot.states import UploadMode, YouTubeUploadMode
 from src.config import (
     GOOGLE_SHEET_ID,
     MAX_CONCURRENT_ANALYSIS,
@@ -23,7 +23,6 @@ from src.config import (
     VIDEO_ANALYSIS_AI_TIMEOUT_SEC,
     VIDEO_ANALYSIS_DB_TIMEOUT_SEC,
 )
-from src.db.repositories.users import get_screenshots_mode
 from src.db.repositories.videos import insert_video
 from src.db.supabase_client import get_supabase
 from src.services.sheets_service import queue_export
@@ -74,6 +73,7 @@ def _format_processing_exception(exc: Exception) -> str:
 
 
 @router.message(UploadMode.active, F.photo)
+@router.message(YouTubeUploadMode.active, F.photo)
 async def handle_photo(
     message: Message,
     bot: Bot,
@@ -106,9 +106,8 @@ async def handle_photo(
     )
 
     # Режим: строго 2 или 3 скриншота на одно видео (берём из БД до любой обработки)
-    supabase = get_supabase()
-    chunk_size = get_screenshots_mode(supabase, user_id) if supabase and user_id else "2"
-    chunk_size = int(chunk_size)
+    current_data = await state.get_data()
+    chunk_size = int(current_data.get("upload_chunk_size") or "2")
 
     n = len(messages)
     if n == 0:

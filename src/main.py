@@ -54,13 +54,14 @@ def _setup_dispatch(dp: Dispatcher, bot: Bot) -> None:
 async def setup_bot_commands(bot: Bot) -> None:
     commands = [
         BotCommand(command="start", description="Главное меню"),
-        BotCommand(command="upload", description="Загрузить скрины роликов"),
+        BotCommand(command="upload", description="Загрузить TikTok / Instagram"),
+        BotCommand(command="upload_youtube", description="Загрузить YouTube"),
         BotCommand(command="upload_funnel", description="Воронка по скринам"),
         BotCommand(command="import_csv", description="Импортировать CSV воронки"),
         BotCommand(command="chat_info", description="Показать chat_id и topic_id"),
         BotCommand(command="sources", description="Статус App Store / Google Play"),
         BotCommand(command="sync_funnels", description="Статус автосбора воронки"),
-        BotCommand(command="done", description="Выключить режим скринов"),
+        BotCommand(command="done", description="Выключить режим загрузки"),
         BotCommand(command="help", description="Как пользоваться ботом"),
         BotCommand(command="stats", description="Моя статистика"),
         BotCommand(command="day_stats", description="Отчёт за 24 часа"),
