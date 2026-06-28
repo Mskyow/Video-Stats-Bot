@@ -14,3 +14,11 @@ class YouTubeUploadMode(StatesGroup):
 
 class FunnelUploadMode(StatesGroup):
     active = State()
+
+
+class MarketingDailyMode(StatesGroup):
+    active = State()
+
+
+class PublicScrapeMode(StatesGroup):
+    active = State()

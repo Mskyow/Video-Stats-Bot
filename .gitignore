@@ -6,6 +6,7 @@ credentials-gsheet.json
 credentials-gsheet.oneline.txt
 *-gsheet*.json
 *-google-sheets*.json
+otty-*.json
 venv
 __pycache__
 *.pyc

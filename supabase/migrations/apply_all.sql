@@ -189,3 +189,154 @@ ADD COLUMN IF NOT EXISTS end_retention_pct NUMERIC;
 COMMENT ON COLUMN users.screenshots_mode IS '2 = пара скриншотов на видео (Overview + Retention), 3 = три скриншота на видео';
 COMMENT ON COLUMN videos.end_retention_second IS 'Second at retention-after-core (3rd screenshot); integer, e.g. 6 for 0:06';
 COMMENT ON COLUMN videos.end_retention_pct IS 'Retention percentage at that second (0-100); from 3rd screenshot Retention Rate';
+
+-- ============================================================
+-- 8. DAILY TOP-OF-FUNNEL CHANNEL TOTALS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.channel_daily_metrics (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    metric_date DATE NOT NULL,
+    platform TEXT NOT NULL CHECK (platform IN ('TikTok', 'Instagram', 'YouTube', 'Other')),
+    account_name TEXT NOT NULL DEFAULT 'total',
+    views INTEGER NOT NULL CHECK (views >= 0),
+    likes INTEGER CHECK (likes IS NULL OR likes >= 0),
+    comments INTEGER CHECK (comments IS NULL OR comments >= 0),
+    saves INTEGER CHECK (saves IS NULL OR saves >= 0),
+    shares INTEGER CHECK (shares IS NULL OR shares >= 0),
+    source TEXT NOT NULL DEFAULT 'telegram_text',
+    raw_text TEXT,
+    created_by_telegram_id BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (metric_date, platform, account_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_daily_metrics_date
+    ON public.channel_daily_metrics (metric_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_channel_daily_metrics_platform
+    ON public.channel_daily_metrics (platform);
+
+COMMENT ON TABLE channel_daily_metrics IS 'Daily top-of-funnel total views by acquisition platform/account';
+
+-- ============================================================
+-- 9. RAW PUBLIC SCRAPE LOG
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.public_video_scrapes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scraped_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    platform TEXT NOT NULL DEFAULT 'Other',
+    url TEXT NOT NULL,
+    raw_id TEXT,
+    title TEXT,
+    uploader TEXT,
+    upload_date TEXT,
+    views INTEGER CHECK (views IS NULL OR views >= 0),
+    likes INTEGER CHECK (likes IS NULL OR likes >= 0),
+    comments INTEGER CHECK (comments IS NULL OR comments >= 0),
+    shares INTEGER CHECK (shares IS NULL OR shares >= 0),
+    created_by_telegram_id BIGINT,
+    error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_public_video_scrapes_scraped_at
+    ON public.public_video_scrapes (scraped_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_public_video_scrapes_platform
+    ON public.public_video_scrapes (platform);
+
+COMMENT ON TABLE public_video_scrapes IS 'Raw public TikTok/Instagram scrape attempts, including partial results without views';
+
+-- ============================================================
+-- 10. RAW SOCIAL VIDEO SNAPSHOTS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.social_video_snapshots (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    snapshot_date DATE NOT NULL,
+    scraped_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    platform TEXT NOT NULL CHECK (platform IN ('TikTok', 'Instagram', 'YouTube', 'Other')),
+    account_name TEXT NOT NULL,
+    video_id TEXT NOT NULL,
+    video_url TEXT,
+    published_at TIMESTAMPTZ,
+    title TEXT,
+    views INTEGER CHECK (views IS NULL OR views >= 0),
+    likes INTEGER CHECK (likes IS NULL OR likes >= 0),
+    comments INTEGER CHECK (comments IS NULL OR comments >= 0),
+    saves INTEGER CHECK (saves IS NULL OR saves >= 0),
+    shares INTEGER CHECK (shares IS NULL OR shares >= 0),
+    provider TEXT NOT NULL DEFAULT 'scrapecreators',
+    raw_json JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (snapshot_date, platform, account_name, video_id, provider)
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_video_snapshots_account_date
+    ON public.social_video_snapshots (platform, account_name, snapshot_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_social_video_snapshots_video_date
+    ON public.social_video_snapshots (platform, account_name, video_id, snapshot_date DESC);
+-- 013_social_scrape_automation.sql
+
+CREATE TABLE IF NOT EXISTS public.social_scrape_accounts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    platform TEXT NOT NULL CHECK (platform IN ('TikTok', 'Instagram')),
+    handle TEXT NOT NULL,
+    display_name TEXT,
+    start_video_id TEXT,
+    start_published_at TIMESTAMPTZ,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (platform, handle)
+);
+
+CREATE TABLE IF NOT EXISTS public.social_scrape_runs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id UUID NOT NULL REFERENCES public.social_scrape_accounts(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL DEFAULT 'scrapecreators',
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'success', 'failed')),
+    pages_requested INTEGER NOT NULL DEFAULT 0 CHECK (pages_requested >= 0),
+    videos_received INTEGER NOT NULL DEFAULT 0 CHECK (videos_received >= 0),
+    videos_in_scope INTEGER NOT NULL DEFAULT 0 CHECK (videos_in_scope >= 0),
+    total_lifetime_views BIGINT CHECK (total_lifetime_views IS NULL OR total_lifetime_views >= 0),
+    start_video_found BOOLEAN,
+    raw_pages JSONB,
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.social_video_snapshots
+    ADD COLUMN IF NOT EXISTS account_id UUID REFERENCES public.social_scrape_accounts(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS run_id UUID REFERENCES public.social_scrape_runs(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS page_number INTEGER CHECK (page_number IS NULL OR page_number > 0),
+    ADD COLUMN IF NOT EXISTS position_in_run INTEGER CHECK (position_in_run IS NULL OR position_in_run > 0);
+
+CREATE INDEX IF NOT EXISTS idx_social_scrape_accounts_enabled
+    ON public.social_scrape_accounts (enabled, platform, handle);
+
+CREATE INDEX IF NOT EXISTS idx_social_scrape_runs_account_started
+    ON public.social_scrape_runs (account_id, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_social_video_snapshots_run
+    ON public.social_video_snapshots (run_id);
+
+INSERT INTO public.social_scrape_accounts (
+    platform,
+    handle,
+    display_name,
+    start_video_id,
+    start_published_at,
+    enabled
+)
+VALUES
+    ('Instagram', 'sarah.mitchell13', 'Sarah Mitchell', '3922474992362616099_73855765618', '2026-06-18T20:45:13Z', TRUE),
+    ('TikTok', 'eli_robinsonn', 'Ellie Robinson', '7652832727363833102', '2026-06-18T20:19:42Z', TRUE)
+ON CONFLICT (platform, handle) DO UPDATE SET
+    display_name = EXCLUDED.display_name,
+    start_video_id = EXCLUDED.start_video_id,
+    start_published_at = EXCLUDED.start_published_at,
+    enabled = EXCLUDED.enabled,
+    updated_at = NOW();

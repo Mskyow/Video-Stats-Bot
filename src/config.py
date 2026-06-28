@@ -101,6 +101,27 @@ GOOGLE_PLAY_REPORTS_PREFIX: str | None = _get_optional("GOOGLE_PLAY_REPORTS_PREF
 GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: str | None = _get_optional("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON")
 GOOGLE_PLAY_SERVICE_ACCOUNT_PATH: str | None = _get_optional("GOOGLE_PLAY_SERVICE_ACCOUNT_PATH")
 
+# Instagram Graph API (optional automated top-of-funnel collector)
+INSTAGRAM_ACCESS_TOKEN: str | None = _get_optional("INSTAGRAM_ACCESS_TOKEN")
+INSTAGRAM_USER_ID: str | None = _get_optional("INSTAGRAM_USER_ID")
+INSTAGRAM_GRAPH_API_VERSION: str = _get_optional("INSTAGRAM_GRAPH_API_VERSION") or "v23.0"
+
+# ScrapeCreators API (optional public scraper for TikTok / Instagram snapshots)
+SCRAPECREATORS_API_KEY: str | None = _get_optional("SCRAPECREATORS_API_KEY")
+SCRAPECREATORS_TIMEOUT_SEC: float = max(
+    5.0, _get_float_optional("SCRAPECREATORS_TIMEOUT_SEC", 60.0)
+)
+SOCIAL_SCRAPE_ENABLED: bool = _get_bool_optional("SOCIAL_SCRAPE_ENABLED", True)
+SOCIAL_SCRAPE_HOUR_UTC: int = min(
+    23, max(0, _get_int_optional("SOCIAL_SCRAPE_HOUR_UTC", 6))
+)
+SOCIAL_SCRAPE_MINUTE_UTC: int = min(
+    59, max(0, _get_int_optional("SOCIAL_SCRAPE_MINUTE_UTC", 0))
+)
+SOCIAL_SCRAPE_MAX_PAGES: int = max(
+    1, _get_int_optional("SOCIAL_SCRAPE_MAX_PAGES", 20)
+)
+
 # Лимит одновременных запросов к AI
 MAX_CONCURRENT_ANALYSIS: int = max(1, _get_int_optional("MAX_CONCURRENT_ANALYSIS", 5))
 # Тайм-аут одного запроса к OpenRouter (сек)

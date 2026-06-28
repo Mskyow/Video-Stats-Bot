@@ -31,6 +31,7 @@ from src.services.sheets_service import (
     MARKETING_FUNNELS_COLUMNS,
     VIDEO_ANALYSIS_COLUMNS,
     _build_row,
+    _build_marketing_daily_wide_row,
     _calculate_age_hours,
     _get_client,
     _get_credentials,
@@ -41,6 +42,57 @@ from src.services.sheets_service import (
     upsert_marketing_funnel_rows,
     validate_normalized_csv_headers,
 )
+
+
+class TestMarketingDailyWideRows:
+    def test_instagram_account_populates_its_column_and_formulas(self):
+        row = _build_marketing_daily_wide_row(
+            {
+                "metric_date": "2026-06-29",
+                "platform": "Instagram",
+                "account_name": "@sarah.mitchell13",
+                "views": 123,
+                "updated_at": "2026-06-29T23:00:00Z",
+            },
+            row_index=2,
+        )
+
+        assert row is not None
+        assert row["Date"] == "2026-06-29"
+        assert row["IG Sarah"] == "123"
+        assert row["TT Ellie"] == ""
+        assert row["Instagram Views"] == "=SUM(E2:G2)"
+        assert row["TikTok Views"] == "=SUM(H2:J2)"
+        assert row["Total Views"] == "=SUM(C2:D2)"
+
+    def test_tiktok_update_preserves_existing_instagram_value(self):
+        row = _build_marketing_daily_wide_row(
+            {
+                "metric_date": "2026-06-29",
+                "platform": "TikTok",
+                "account_name": "eli_robinsonn",
+                "views": 456,
+            },
+            row_index=3,
+            existing={"Date": "2026-06-29", "IG Sarah": "123"},
+        )
+
+        assert row is not None
+        assert row["IG Sarah"] == "123"
+        assert row["TT Ellie"] == "456"
+        assert row["Total Views"] == "=SUM(C3:D3)"
+
+    def test_unknown_account_is_not_exported_into_wrong_column(self):
+        row = _build_marketing_daily_wide_row(
+            {
+                "metric_date": "2026-06-29",
+                "platform": "Instagram",
+                "account_name": "unknown",
+                "views": 123,
+            },
+            row_index=2,
+        )
+        assert row is None
 
 
 class FakeWorksheet:

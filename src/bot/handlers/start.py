@@ -11,7 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src import config
-from src.bot.states import FunnelUploadMode, UploadMode, YouTubeUploadMode
+from src.bot.states import FunnelUploadMode, MarketingDailyMode, UploadMode, YouTubeUploadMode
 from src.db.repositories.users import (
     authorize_user,
     get_or_create_user,
@@ -31,6 +31,10 @@ def main_actions_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="📸 TikTok / Instagram", callback_data="start_video_upload"),
                 InlineKeyboardButton(text="▶️ YouTube", callback_data="start_youtube_upload"),
+            ],
+            [
+                InlineKeyboardButton(text="📊 Маркетинг за день", callback_data="start_marketing_daily"),
+                InlineKeyboardButton(text="🔎 Public scrape", callback_data="help_public_scrape"),
             ],
             [
                 InlineKeyboardButton(text="📊 Воронка по скринам", callback_data="start_funnel_upload"),
@@ -81,6 +85,8 @@ WELCOME_UNAUTHORIZED_TEXT = (
 START_TEXT = (
     "👋 <b>Creator Copilot</b>\n\n"
     "<b>Что умеет бот:</b>\n"
+    "• Дневные totals по TikTok / Instagram / YouTube → <b>Marketing Daily</b>\n"
+    "• Public scrape ссылок TikTok / Instagram → пробная бесплатная автоматизация\n"
     "• TikTok / Instagram скрины → <b>Video Analysis</b>\n"
     "• YouTube скрины → <b>Video Analysis</b>\n"
     "• CSV воронки → <b>Marketing Funnels</b>\n"
@@ -89,11 +95,22 @@ START_TEXT = (
     "<b>Быстрый старт:</b>\n"
     "1. TikTok / Instagram: <code>/upload</code>\n"
     "2. YouTube: <code>/upload_youtube</code>\n"
-    "3. Скрины воронки: <code>/upload_funnel</code>\n"
-    "4. CSV: <code>/import_csv</code>\n"
+    "3. Маркетинг за день: <code>/marketing</code>\n"
+    "4. Public scrape: <code>/scrape</code>\n"
+    "5. Скрины воронки: <code>/upload_funnel</code>\n"
+    "6. CSV: <code>/import_csv</code>\n"
     "5. Завершить режим загрузки: <code>/done</code>\n\n"
     "<b>Остальные команды:</b>\n"
     "/stats, /day_stats, /all_stats, /help, /sync_funnels"
+)
+
+MARKETING_DAILY_HELP_TEXT = (
+    "📊 <b>Маркетинг за день</b>\n\n"
+    "Отправь дневные totals по каналам одним сообщением.\n\n"
+    "<b>Пример:</b>\n"
+    "<code>24.06 TikTok 12000 Instagram 4300 YouTube 800</code>\n\n"
+    "Это верхняя маркетинговая воронка: без разреза до отдельных роликов.\n"
+    "Лист: <b>Marketing Daily</b>"
 )
 
 HELP_TEXT = (
@@ -182,6 +199,16 @@ SOURCES_HELP_TEXT = (
     "Если источник ещё не подключён, CSV остаётся fallback-вариантом."
 )
 
+PUBLIC_SCRAPE_HELP_TEXT = (
+    "🔎 <b>Public scrape</b>\n\n"
+    "Команда <code>/scrape</code> пробует бесплатно достать публичные метрики по ссылке "
+    "TikTok или Instagram через yt-dlp.\n\n"
+    "<b>Пример:</b>\n"
+    "<code>/scrape https://www.tiktok.com/@account/video/...</code>\n\n"
+    "Ограничение: это не официальный API и не внутренние insights. Если Instagram/TikTok закроет доступ, "
+    "нужен будет fallback через скриншоты."
+)
+
 
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
@@ -252,6 +279,7 @@ async def cmd_help(message: Message) -> None:
         "help_funnel_screens",
         "help_mode",
         "help_sources",
+        "help_public_scrape",
     )
 )
 async def cb_quick_help(callback: CallbackQuery) -> None:
@@ -265,6 +293,8 @@ async def cb_quick_help(callback: CallbackQuery) -> None:
         text = FUNNEL_SCREENSHOTS_HELP_TEXT
     elif callback.data == "help_sources":
         text = SOURCES_HELP_TEXT
+    elif callback.data == "help_public_scrape":
+        text = PUBLIC_SCRAPE_HELP_TEXT
     else:
         text = MODE_HELP_TEXT
     if callback.message:
@@ -314,6 +344,15 @@ async def cb_start_funnel_upload(callback: CallbackQuery, state: FSMContext) -> 
     if callback.message:
         await callback.message.answer(FUNNEL_SCREENSHOTS_HELP_TEXT, reply_markup=help_back_keyboard())
     await callback.answer("Режим воронки включён")
+
+
+@router.callback_query(lambda c: c.data == "start_marketing_daily")
+async def cb_start_marketing_daily(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(MarketingDailyMode.active)
+    if callback.message:
+        await callback.message.answer(MARKETING_DAILY_HELP_TEXT, reply_markup=help_back_keyboard())
+    await callback.answer("Режим маркетинга включён")
 
 
 @router.callback_query(lambda c: c.data == "back_to_main_menu")

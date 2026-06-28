@@ -18,6 +18,10 @@ from src.bot.handlers import (
     funnel_screenshots_router,
     funnel_sync_router,
     image_router,
+    instagram_api_router,
+    marketing_daily_router,
+    public_scrape_router,
+    scrapecreators_router,
     start_router,
     stats_router,
     upload_router,
@@ -43,6 +47,10 @@ def _setup_dispatch(dp: Dispatcher, bot: Bot) -> None:
         csv_router,
         funnel_screenshots_router,
         funnel_sync_router,
+        instagram_api_router,
+        marketing_daily_router,
+        public_scrape_router,
+        scrapecreators_router,
         upload_router,
         start_router,
         image_router,
@@ -56,6 +64,14 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="start", description="Главное меню"),
         BotCommand(command="upload", description="Загрузить TikTok / Instagram"),
         BotCommand(command="upload_youtube", description="Загрузить YouTube"),
+        BotCommand(command="marketing", description="Маркетинг за день"),
+        BotCommand(command="marketing_today", description="Маркетинг сегодня"),
+        BotCommand(command="scrape", description="Попробовать public scrape URL"),
+        BotCommand(command="sc_check", description="Проверить ScrapeCreators"),
+        BotCommand(command="sc_collect", description="Собрать ScrapeCreators snapshot"),
+        BotCommand(command="sc_collect_all", description="Собрать настроенные social-аккаунты"),
+        BotCommand(command="ig_check", description="Проверить Instagram API"),
+        BotCommand(command="ig_collect", description="Собрать Instagram views"),
         BotCommand(command="upload_funnel", description="Воронка по скринам"),
         BotCommand(command="import_csv", description="Импортировать CSV воронки"),
         BotCommand(command="chat_info", description="Показать chat_id и topic_id"),
@@ -105,6 +121,32 @@ async def send_daily_report_job(bot_instance: Bot) -> None:
         logger.exception("Failed to send scheduled daily report: %s", exc)
 
 
+async def collect_social_accounts_job(bot_instance: Bot) -> None:
+    from src.bot.handlers.scrapecreators import format_configured_collection_results
+    from src.services.social_scrape_collector import collect_configured_social_accounts
+
+    if not config.SCRAPECREATORS_API_KEY:
+        logger.warning("SCRAPECREATORS_API_KEY not set, skipping scheduled social scrape")
+        return
+
+    supabase_client = get_client(config.SUPABASE_URL, config.SUPABASE_KEY)
+    results = await asyncio.to_thread(collect_configured_social_accounts, supabase_client)
+    logger.info(
+        "Scheduled social scrape finished: %s",
+        [(item.platform, item.handle, item.status, item.videos_saved) for item in results],
+    )
+
+    if config.REPORT_CHAT_ID:
+        send_kwargs: dict = {
+            "chat_id": config.REPORT_CHAT_ID,
+            "text": format_configured_collection_results(results),
+            "parse_mode": "HTML",
+        }
+        if config.REPORT_TOPIC_ID is not None:
+            send_kwargs["message_thread_id"] = config.REPORT_TOPIC_ID
+        await bot_instance.send_message(**send_kwargs)
+
+
 def _create_report_scheduler(bot: Bot):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
@@ -118,7 +160,24 @@ def _create_report_scheduler(bot: Bot):
             timezone=config.REPORT_TIMEZONE,
         ),
         kwargs={"bot_instance": bot},
+        id="daily_report",
+        replace_existing=True,
     )
+    if config.SOCIAL_SCRAPE_ENABLED:
+        scheduler.add_job(
+            collect_social_accounts_job,
+            CronTrigger(
+                hour=config.SOCIAL_SCRAPE_HOUR_UTC,
+                minute=config.SOCIAL_SCRAPE_MINUTE_UTC,
+                timezone="UTC",
+            ),
+            kwargs={"bot_instance": bot},
+            id="daily_social_scrape",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
     scheduler.start()
     logger.info(
         "Scheduler started. Daily report at %02d:%02d %s.",
@@ -126,6 +185,12 @@ def _create_report_scheduler(bot: Bot):
         config.REPORT_MINUTE,
         config.REPORT_TIMEZONE,
     )
+    if config.SOCIAL_SCRAPE_ENABLED:
+        logger.info(
+            "Social scrape scheduled daily at %02d:%02d UTC.",
+            config.SOCIAL_SCRAPE_HOUR_UTC,
+            config.SOCIAL_SCRAPE_MINUTE_UTC,
+        )
     return scheduler
 
 

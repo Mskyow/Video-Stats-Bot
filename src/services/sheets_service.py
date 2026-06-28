@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 VIDEO_ANALYSIS_WORKSHEET_NAME = "Video Analysis"
 MARKETING_FUNNELS_WORKSHEET_NAME = GOOGLE_SHEET_WORKSHEET_NAME or "Marketing Funnels"
+MARKETING_DAILY_WORKSHEET_NAME = "Marketing Daily"
 
 VIDEO_ANALYSIS_COLUMNS = [
     "Recorded At",
@@ -63,6 +64,25 @@ MARKETING_FUNNELS_COLUMNS = [
     "Installs",
     "Purchases",
 ]
+
+MARKETING_DAILY_COLUMNS = [
+    "Date",
+    "Total Views",
+    "Instagram Views",
+    "TikTok Views",
+    "IG Sarah",
+    "IG Account 2",
+    "IG Account 3",
+    "TT Ellie",
+    "TT Account 2",
+    "TT Account 3",
+    "Updated At",
+]
+
+MARKETING_DAILY_ACCOUNT_COLUMNS = {
+    ("instagram", "sarah.mitchell13"): "IG Sarah",
+    ("tiktok", "eli_robinsonn"): "TT Ellie",
+}
 
 # Backwards-compatibility alias for older tests/imports.
 REPORT_COLUMNS = VIDEO_ANALYSIS_COLUMNS
@@ -108,6 +128,13 @@ def queue_video_analysis_export(video_data: dict[str, Any]) -> None:
         logger.warning("Sheets export queue is full; dropping video export")
 
 
+def queue_marketing_daily_export(metric_data: dict[str, Any]) -> None:
+    try:
+        get_sheets_queue().put_nowait({"kind": "marketing_daily", "payload": metric_data})
+    except asyncio.QueueFull:
+        logger.warning("Sheets export queue is full; dropping marketing daily export")
+
+
 def queue_export(video_data: dict[str, Any]) -> None:
     """Backward-compatible alias."""
     queue_video_analysis_export(video_data)
@@ -125,6 +152,8 @@ async def sheets_worker() -> None:
 
             if kind == "video_analysis":
                 await loop.run_in_executor(None, export_video_to_sheet, payload)
+            elif kind == "marketing_daily":
+                await loop.run_in_executor(None, export_marketing_daily_to_sheet, payload)
             else:
                 logger.warning("Unknown sheets worker item kind: %s", kind)
 
@@ -586,6 +615,116 @@ def _worksheet_records(
             record[header] = padded[idx] if idx < len(padded) else ""
         records.append(record)
     return records
+
+
+def _marketing_daily_account_column(platform: Any, account_name: Any) -> str | None:
+    normalized_platform = _normalize_platform(platform).lower()
+    normalized_account = str(account_name or "").strip().lower().removeprefix("@")
+    return MARKETING_DAILY_ACCOUNT_COLUMNS.get((normalized_platform, normalized_account))
+
+
+def _build_marketing_daily_wide_row(
+    metric_data: dict[str, Any],
+    *,
+    row_index: int,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    date_value = str(metric_data.get("metric_date") or metric_data.get("Date") or "").strip()
+    account_column = _marketing_daily_account_column(
+        metric_data.get("platform") or metric_data.get("Platform"),
+        metric_data.get("account_name") or metric_data.get("Account"),
+    )
+    if not date_value or not account_column:
+        return None
+
+    row = {column: "" for column in MARKETING_DAILY_COLUMNS}
+    if existing:
+        for column in MARKETING_DAILY_COLUMNS:
+            row[column] = existing.get(column, "")
+
+    row["Date"] = date_value
+    row[account_column] = _format_number(
+        _parse_int(metric_data.get("views") if "views" in metric_data else metric_data.get("Views"))
+    )
+    row["Total Views"] = f"=SUM(C{row_index}:D{row_index})"
+    row["Instagram Views"] = f"=SUM(E{row_index}:G{row_index})"
+    row["TikTok Views"] = f"=SUM(H{row_index}:J{row_index})"
+    row["Updated At"] = str(
+        metric_data.get("updated_at")
+        or metric_data.get("Updated At")
+        or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    ).strip()
+    return row
+
+
+def _update_marketing_daily_row(
+    worksheet: gspread.Worksheet,
+    row_index: int,
+    row_data: dict[str, Any],
+) -> None:
+    values = [[str(row_data.get(column, "")) for column in MARKETING_DAILY_COLUMNS]]
+    end_col = _column_letter(len(MARKETING_DAILY_COLUMNS))
+    worksheet.update(
+        range_name=f"A{row_index}:{end_col}{row_index}",
+        values=values,
+        value_input_option="USER_ENTERED",
+    )
+
+
+def _append_marketing_daily_row(
+    worksheet: gspread.Worksheet,
+    row_data: dict[str, Any],
+) -> None:
+    worksheet.append_row(
+        [str(row_data.get(column, "")) for column in MARKETING_DAILY_COLUMNS],
+        value_input_option="USER_ENTERED",
+    )
+
+
+def export_marketing_daily_to_sheet(metric_data: dict[str, Any]) -> bool:
+    if (not GOOGLE_SHEET_CREDENTIALS_PATH and not GOOGLE_CREDENTIALS_JSON) or not GOOGLE_SHEET_ID:
+        logger.warning("Google Sheets not configured; skip marketing daily export")
+        return False
+
+    try:
+        client = _get_client()
+        spreadsheet = _open_spreadsheet(client)
+        worksheet = _get_or_create_worksheet(
+            spreadsheet,
+            MARKETING_DAILY_WORKSHEET_NAME,
+            MARKETING_DAILY_COLUMNS,
+        )
+        end_col = _column_letter(len(MARKETING_DAILY_COLUMNS))
+        _format_sheet_range(worksheet, f"A1:{end_col}1", bold=True)
+
+        records = _worksheet_records(worksheet, MARKETING_DAILY_COLUMNS)
+        for record in records:
+            incoming_date = str(metric_data.get("metric_date") or metric_data.get("Date") or "").strip()
+            if str(record.get("Date") or "").strip() == incoming_date:
+                row_data = _build_marketing_daily_wide_row(
+                    metric_data,
+                    row_index=record["_row_index"],
+                    existing=record,
+                )
+                if not row_data:
+                    logger.warning("No Marketing Daily column configured for metric: %s", metric_data)
+                    return False
+                _update_marketing_daily_row(worksheet, record["_row_index"], row_data)
+                return True
+
+        row_index = len(records) + 2
+        row_data = _build_marketing_daily_wide_row(metric_data, row_index=row_index)
+        if not row_data:
+            logger.warning("No Marketing Daily column configured for metric: %s", metric_data)
+            return False
+        _append_marketing_daily_row(worksheet, row_data)
+        return True
+    except FileNotFoundError as exc:
+        logger.warning("Marketing daily sheet export skipped: %s", exc)
+        return False
+    except Exception:
+        logger.exception("Unexpected error during Marketing Daily export")
+        return False
 
 
 def _marketing_row_key(date_value: str, channel: str, store: str) -> tuple[str, str, str]:
