@@ -132,6 +132,9 @@ async def cmd_sc_collect_all(message: Message) -> None:
         return
     await message.answer("⏳ Собираю все настроенные social-аккаунты…")
     results = await asyncio.to_thread(collect_configured_social_accounts, supabase)
+    for result in results:
+        if result.daily_metric:
+            queue_marketing_daily_export(result.daily_metric)
     await message.answer(format_configured_collection_results(results))
 
 

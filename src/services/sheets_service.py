@@ -70,18 +70,24 @@ MARKETING_DAILY_COLUMNS = [
     "Total Views",
     "Instagram Views",
     "TikTok Views",
+    "IG Emma",
     "IG Sarah",
-    "IG Account 2",
-    "IG Account 3",
+    "IG Patricia",
     "TT Ellie",
-    "TT Account 2",
-    "TT Account 3",
+    "TT Kamil",
+    "TT Patricia",
+    "TT Maxine",
     "Updated At",
 ]
 
 MARKETING_DAILY_ACCOUNT_COLUMNS = {
+    ("instagram", "emma_garcia826"): "IG Emma",
     ("instagram", "sarah.mitchell13"): "IG Sarah",
+    ("instagram", "patricia_amateur"): "IG Patricia",
     ("tiktok", "eli_robinsonn"): "TT Ellie",
+    ("tiktok", "kamil_smith4"): "TT Kamil",
+    ("tiktok", "patricia_amateur"): "TT Patricia",
+    ("tiktok", "maximgrergl"): "TT Maxine",
 }
 
 # Backwards-compatibility alias for older tests/imports.
@@ -648,7 +654,7 @@ def _build_marketing_daily_wide_row(
     )
     row["Total Views"] = f"=SUM(C{row_index}:D{row_index})"
     row["Instagram Views"] = f"=SUM(E{row_index}:G{row_index})"
-    row["TikTok Views"] = f"=SUM(H{row_index}:J{row_index})"
+    row["TikTok Views"] = f"=SUM(H{row_index}:K{row_index})"
     row["Updated At"] = str(
         metric_data.get("updated_at")
         or metric_data.get("Updated At")

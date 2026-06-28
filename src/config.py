@@ -118,6 +118,7 @@ SOCIAL_SCRAPE_HOUR_UTC: int = min(
 SOCIAL_SCRAPE_MINUTE_UTC: int = min(
     59, max(0, _get_int_optional("SOCIAL_SCRAPE_MINUTE_UTC", 0))
 )
+SOCIAL_SCRAPE_TIMEZONE: str = _get_optional("SOCIAL_SCRAPE_TIMEZONE") or "Europe/Minsk"
 SOCIAL_SCRAPE_MAX_PAGES: int = max(
     1, _get_int_optional("SOCIAL_SCRAPE_MAX_PAGES", 20)
 )

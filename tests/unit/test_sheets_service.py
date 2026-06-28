@@ -62,7 +62,7 @@ class TestMarketingDailyWideRows:
         assert row["IG Sarah"] == "123"
         assert row["TT Ellie"] == ""
         assert row["Instagram Views"] == "=SUM(E2:G2)"
-        assert row["TikTok Views"] == "=SUM(H2:J2)"
+        assert row["TikTok Views"] == "=SUM(H2:K2)"
         assert row["Total Views"] == "=SUM(C2:D2)"
 
     def test_tiktok_update_preserves_existing_instagram_value(self):

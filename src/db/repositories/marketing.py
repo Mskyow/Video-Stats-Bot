@@ -219,9 +219,11 @@ def upsert_social_video_snapshots(
     run_id: str,
     videos: list[Any],
 ) -> list[dict[str, Any]]:
+    scraped_at = datetime.now(timezone.utc).isoformat()
     payloads = [
         {
             "snapshot_date": snapshot_date,
+            "scraped_at": scraped_at,
             "platform": item.platform,
             "account_name": item.account_name,
             "video_id": item.video_id,
@@ -253,6 +255,50 @@ def upsert_social_video_snapshots(
         .execute()
     )
     return list(response.data or payloads)
+
+
+def get_previous_account_snapshot(
+    supabase: Client,
+    *,
+    platform: str,
+    account_name: str,
+    before_date: str,
+    provider: str = "scrapecreators",
+) -> tuple[str | None, str | None, dict[str, dict[str, Any]]]:
+    latest = (
+        supabase.table("social_video_snapshots")
+        .select("snapshot_date,scraped_at")
+        .eq("platform", platform)
+        .eq("account_name", account_name)
+        .eq("provider", provider)
+        .lt("snapshot_date", before_date)
+        .order("snapshot_date", desc=True)
+        .limit(1)
+        .execute()
+    )
+    latest_rows = latest.data or []
+    if not latest_rows:
+        return None, None, {}
+
+    snapshot_date = str(latest_rows[0]["snapshot_date"])
+    response = (
+        supabase.table("social_video_snapshots")
+        .select("*")
+        .eq("platform", platform)
+        .eq("account_name", account_name)
+        .eq("provider", provider)
+        .eq("snapshot_date", snapshot_date)
+        .execute()
+    )
+    rows = list(response.data or [])
+    by_video = {
+        str(row["video_id"]): row
+        for row in rows
+        if row.get("video_id")
+    }
+    scraped_values = [str(row["scraped_at"]) for row in rows if row.get("scraped_at")]
+    previous_scraped_at = max(scraped_values) if scraped_values else None
+    return snapshot_date, previous_scraped_at, by_video
 
 
 def list_latest_previous_video_snapshots(

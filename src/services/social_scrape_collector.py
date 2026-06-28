@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import logging
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from supabase import Client
 
@@ -12,10 +13,12 @@ from src import config
 from src.db.repositories.marketing import (
     create_social_scrape_run,
     finish_social_scrape_run,
+    get_previous_account_snapshot,
     list_enabled_social_scrape_accounts,
+    upsert_channel_daily_metric,
     upsert_social_video_snapshots,
 )
-from src.services.scrapecreators_service import ScrapeCreatorsClient
+from src.services.scrapecreators_service import ScrapeCreatorsClient, SocialVideoMetric
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +35,38 @@ class SocialScrapeResult:
     videos_saved: int
     total_lifetime_views: int
     start_video_found: bool | None
+    daily_metric: dict[str, Any] | None = None
     error: str | None = None
+
+
+def calculate_account_daily_views(
+    current: list[SocialVideoMetric],
+    previous_by_video: dict[str, dict[str, Any]],
+    *,
+    previous_scraped_at: str | None,
+) -> tuple[int, int, int]:
+    previous_time = None
+    if previous_scraped_at:
+        previous_time = datetime.fromisoformat(previous_scraped_at.replace("Z", "+00:00"))
+
+    total = 0
+    matched = 0
+    new_videos = 0
+    for item in current:
+        if item.views is None:
+            continue
+        previous = previous_by_video.get(item.video_id)
+        if previous and previous.get("views") is not None:
+            total += max(0, int(item.views) - int(previous["views"]))
+            matched += 1
+            continue
+
+        if previous_time and item.published_at:
+            published = datetime.fromisoformat(item.published_at.replace("Z", "+00:00"))
+            if published >= previous_time:
+                total += max(0, int(item.views))
+                new_videos += 1
+    return total, matched, new_videos
 
 
 def collect_social_account(
@@ -40,6 +74,7 @@ def collect_social_account(
     account: dict[str, Any],
     *,
     client: ScrapeCreatorsClient | None = None,
+    calculate_daily: bool = True,
 ) -> SocialScrapeResult:
     platform = str(account["platform"])
     handle = str(account["handle"]).removeprefix("@")
@@ -68,7 +103,18 @@ def collect_social_account(
                 handle,
             )
 
-        snapshot_date = datetime.now(timezone.utc).date().isoformat()
+        snapshot_date = (
+            datetime.now(timezone.utc)
+            .astimezone(ZoneInfo(config.SOCIAL_SCRAPE_TIMEZONE))
+            .date()
+            .isoformat()
+        )
+        previous_date, previous_scraped_at, previous_by_video = get_previous_account_snapshot(
+            supabase,
+            platform=fetched.platform,
+            account_name=fetched.account_name,
+            before_date=snapshot_date,
+        )
         saved = upsert_social_video_snapshots(
             supabase,
             snapshot_date=snapshot_date,
@@ -77,6 +123,26 @@ def collect_social_account(
             videos=fetched.videos,
         )
         total_views = sum(item.views or 0 for item in fetched.videos)
+        daily_metric = None
+        expected_previous_date = (date.fromisoformat(snapshot_date) - timedelta(days=1)).isoformat()
+        if calculate_daily and previous_date == expected_previous_date and previous_by_video:
+            daily_views, matched, new_videos = calculate_account_daily_views(
+                fetched.videos,
+                previous_by_video,
+                previous_scraped_at=previous_scraped_at,
+            )
+            daily_metric = upsert_channel_daily_metric(
+                supabase,
+                metric_date=previous_date,
+                platform=fetched.platform,
+                account_name=fetched.account_name,
+                views=daily_views,
+                source="scrapecreators_delta",
+                raw_text=(
+                    f"interval={previous_date}->{snapshot_date}; "
+                    f"matched_videos={matched}; new_videos={new_videos}"
+                ),
+            )
         finish_social_scrape_run(
             supabase,
             run_id=run_id,
@@ -98,6 +164,7 @@ def collect_social_account(
             videos_saved=len(saved),
             total_lifetime_views=total_views,
             start_video_found=fetched.start_video_found,
+            daily_metric=daily_metric,
         )
     except Exception as exc:
         error = str(exc)[:2000]
@@ -118,11 +185,21 @@ def collect_social_account(
         raise
 
 
-def collect_configured_social_accounts(supabase: Client) -> list[SocialScrapeResult]:
+def collect_configured_social_accounts(
+    supabase: Client,
+    *,
+    calculate_daily: bool = True,
+) -> list[SocialScrapeResult]:
     results: list[SocialScrapeResult] = []
     for account in list_enabled_social_scrape_accounts(supabase):
         try:
-            results.append(collect_social_account(supabase, account))
+            results.append(
+                collect_social_account(
+                    supabase,
+                    account,
+                    calculate_daily=calculate_daily,
+                )
+            )
         except Exception as exc:
             logger.exception(
                 "Social scrape failed for %s @%s",

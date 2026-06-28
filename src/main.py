@@ -123,6 +123,7 @@ async def send_daily_report_job(bot_instance: Bot) -> None:
 
 async def collect_social_accounts_job(bot_instance: Bot) -> None:
     from src.bot.handlers.scrapecreators import format_configured_collection_results
+    from src.services.sheets_service import queue_marketing_daily_export
     from src.services.social_scrape_collector import collect_configured_social_accounts
 
     if not config.SCRAPECREATORS_API_KEY:
@@ -131,6 +132,9 @@ async def collect_social_accounts_job(bot_instance: Bot) -> None:
 
     supabase_client = get_client(config.SUPABASE_URL, config.SUPABASE_KEY)
     results = await asyncio.to_thread(collect_configured_social_accounts, supabase_client)
+    for result in results:
+        if result.daily_metric:
+            queue_marketing_daily_export(result.daily_metric)
     logger.info(
         "Scheduled social scrape finished: %s",
         [(item.platform, item.handle, item.status, item.videos_saved) for item in results],
