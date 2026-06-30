@@ -133,7 +133,7 @@ def collect_social_account(
             )
             daily_metric = upsert_channel_daily_metric(
                 supabase,
-                metric_date=previous_date,
+                metric_date=snapshot_date,
                 platform=fetched.platform,
                 account_name=fetched.account_name,
                 views=daily_views,

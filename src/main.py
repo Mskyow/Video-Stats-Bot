@@ -140,7 +140,7 @@ async def collect_social_accounts_job(bot_instance: Bot) -> None:
         [(item.platform, item.handle, item.status, item.videos_saved) for item in results],
     )
 
-    if config.REPORT_CHAT_ID:
+    if config.SOCIAL_SCRAPE_SEND_TO_TELEGRAM and config.REPORT_CHAT_ID:
         send_kwargs: dict = {
             "chat_id": config.REPORT_CHAT_ID,
             "text": format_configured_collection_results(results),
@@ -156,17 +156,18 @@ def _create_report_scheduler(bot: Bot):
     from apscheduler.triggers.cron import CronTrigger
 
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        send_daily_report_job,
-        CronTrigger(
-            hour=config.REPORT_HOUR,
-            minute=config.REPORT_MINUTE,
-            timezone=config.REPORT_TIMEZONE,
-        ),
-        kwargs={"bot_instance": bot},
-        id="daily_report",
-        replace_existing=True,
-    )
+    if config.REPORT_SCHEDULE_ENABLED:
+        scheduler.add_job(
+            send_daily_report_job,
+            CronTrigger(
+                hour=config.REPORT_HOUR,
+                minute=config.REPORT_MINUTE,
+                timezone=config.REPORT_TIMEZONE,
+            ),
+            kwargs={"bot_instance": bot},
+            id="daily_report",
+            replace_existing=True,
+        )
     if config.SOCIAL_SCRAPE_ENABLED:
         scheduler.add_job(
             collect_social_accounts_job,
@@ -183,12 +184,15 @@ def _create_report_scheduler(bot: Bot):
             misfire_grace_time=3600,
         )
     scheduler.start()
-    logger.info(
-        "Scheduler started. Daily report at %02d:%02d %s.",
-        config.REPORT_HOUR,
-        config.REPORT_MINUTE,
-        config.REPORT_TIMEZONE,
-    )
+    if config.REPORT_SCHEDULE_ENABLED:
+        logger.info(
+            "Scheduler started. Daily report at %02d:%02d %s.",
+            config.REPORT_HOUR,
+            config.REPORT_MINUTE,
+            config.REPORT_TIMEZONE,
+        )
+    else:
+        logger.info("Scheduler started. Daily report schedule disabled.")
     if config.SOCIAL_SCRAPE_ENABLED:
         logger.info(
             "Social scrape scheduled daily at %02d:%02d UTC.",

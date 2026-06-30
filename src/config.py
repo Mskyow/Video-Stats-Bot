@@ -88,6 +88,7 @@ REPORT_TOPIC_ID: int | None = int(v) if (v := _get_optional("REPORT_TOPIC_ID")) 
 REPORT_TIMEZONE: str = _get_optional("REPORT_TIMEZONE") or "Europe/Minsk"
 REPORT_HOUR: int = _get_int_optional("REPORT_HOUR", 15)
 REPORT_MINUTE: int = _get_int_optional("REPORT_MINUTE", 0)
+REPORT_SCHEDULE_ENABLED: bool = _get_bool_optional("REPORT_SCHEDULE_ENABLED", False)
 
 # Marketing funnel sources
 APPSTORE_ISSUER_ID: str | None = _get_optional("APPSTORE_ISSUER_ID")
@@ -113,7 +114,7 @@ SCRAPECREATORS_TIMEOUT_SEC: float = max(
 )
 SOCIAL_SCRAPE_ENABLED: bool = _get_bool_optional("SOCIAL_SCRAPE_ENABLED", True)
 SOCIAL_SCRAPE_HOUR_UTC: int = min(
-    23, max(0, _get_int_optional("SOCIAL_SCRAPE_HOUR_UTC", 6))
+    23, max(0, _get_int_optional("SOCIAL_SCRAPE_HOUR_UTC", 20))
 )
 SOCIAL_SCRAPE_MINUTE_UTC: int = min(
     59, max(0, _get_int_optional("SOCIAL_SCRAPE_MINUTE_UTC", 0))
@@ -121,6 +122,9 @@ SOCIAL_SCRAPE_MINUTE_UTC: int = min(
 SOCIAL_SCRAPE_TIMEZONE: str = _get_optional("SOCIAL_SCRAPE_TIMEZONE") or "Europe/Minsk"
 SOCIAL_SCRAPE_MAX_PAGES: int = max(
     1, _get_int_optional("SOCIAL_SCRAPE_MAX_PAGES", 20)
+)
+SOCIAL_SCRAPE_SEND_TO_TELEGRAM: bool = _get_bool_optional(
+    "SOCIAL_SCRAPE_SEND_TO_TELEGRAM", False
 )
 
 # Лимит одновременных запросов к AI
