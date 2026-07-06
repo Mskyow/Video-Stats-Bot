@@ -114,7 +114,7 @@ SCRAPECREATORS_TIMEOUT_SEC: float = max(
 )
 SOCIAL_SCRAPE_ENABLED: bool = _get_bool_optional("SOCIAL_SCRAPE_ENABLED", True)
 SOCIAL_SCRAPE_HOUR_UTC: int = min(
-    23, max(0, _get_int_optional("SOCIAL_SCRAPE_HOUR_UTC", 20))
+    23, max(0, _get_int_optional("SOCIAL_SCRAPE_HOUR_UTC", 6))
 )
 SOCIAL_SCRAPE_MINUTE_UTC: int = min(
     59, max(0, _get_int_optional("SOCIAL_SCRAPE_MINUTE_UTC", 0))
@@ -122,6 +122,16 @@ SOCIAL_SCRAPE_MINUTE_UTC: int = min(
 SOCIAL_SCRAPE_TIMEZONE: str = _get_optional("SOCIAL_SCRAPE_TIMEZONE") or "Europe/Minsk"
 SOCIAL_SCRAPE_MAX_PAGES: int = max(
     1, _get_int_optional("SOCIAL_SCRAPE_MAX_PAGES", 20)
+)
+SOCIAL_SCRAPE_METRIC_LAG_DAYS: int = max(
+    0, _get_int_optional("SOCIAL_SCRAPE_METRIC_LAG_DAYS", 1)
+)
+SOCIAL_SCRAPE_INTERVAL_MIN_HOURS: float = max(
+    1.0, _get_float_optional("SOCIAL_SCRAPE_INTERVAL_MIN_HOURS", 18.0)
+)
+SOCIAL_SCRAPE_INTERVAL_MAX_HOURS: float = max(
+    SOCIAL_SCRAPE_INTERVAL_MIN_HOURS,
+    _get_float_optional("SOCIAL_SCRAPE_INTERVAL_MAX_HOURS", 30.0),
 )
 SOCIAL_SCRAPE_SEND_TO_TELEGRAM: bool = _get_bool_optional(
     "SOCIAL_SCRAPE_SEND_TO_TELEGRAM", False

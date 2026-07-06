@@ -39,6 +39,35 @@ class SocialScrapeResult:
     error: str | None = None
 
 
+def _interval_hours(previous_scraped_at: str | None, current_scraped_at: datetime) -> float | None:
+    if not previous_scraped_at:
+        return None
+    previous_time = datetime.fromisoformat(previous_scraped_at.replace("Z", "+00:00"))
+    return (current_scraped_at - previous_time).total_seconds() / 3600
+
+
+def _should_emit_daily_metric(
+    *,
+    snapshot_date: str,
+    previous_date: str | None,
+    previous_scraped_at: str | None,
+    current_scraped_at: datetime,
+) -> tuple[bool, str | None]:
+    expected_previous_date = (date.fromisoformat(snapshot_date) - timedelta(days=1)).isoformat()
+    if previous_date != expected_previous_date:
+        return False, f"previous_date_mismatch:{previous_date}->{expected_previous_date}"
+
+    interval_hours = _interval_hours(previous_scraped_at, current_scraped_at)
+    if interval_hours is None:
+        return False, "missing_previous_scraped_at"
+
+    if interval_hours < config.SOCIAL_SCRAPE_INTERVAL_MIN_HOURS:
+        return False, f"interval_too_short:{interval_hours:.2f}h"
+    if interval_hours > config.SOCIAL_SCRAPE_INTERVAL_MAX_HOURS:
+        return False, f"interval_too_long:{interval_hours:.2f}h"
+    return True, None
+
+
 def calculate_account_daily_views(
     current: list[SocialVideoMetric],
     previous_by_video: dict[str, dict[str, Any]],
@@ -103,8 +132,9 @@ def collect_social_account(
                 handle,
             )
 
+        current_scraped_at = datetime.now(timezone.utc)
         snapshot_date = (
-            datetime.now(timezone.utc)
+            current_scraped_at
             .astimezone(ZoneInfo(config.SOCIAL_SCRAPE_TIMEZONE))
             .date()
             .isoformat()
@@ -124,16 +154,24 @@ def collect_social_account(
         )
         total_views = sum(item.views or 0 for item in fetched.videos)
         daily_metric = None
-        expected_previous_date = (date.fromisoformat(snapshot_date) - timedelta(days=1)).isoformat()
-        if calculate_daily and previous_date == expected_previous_date and previous_by_video:
+        should_emit_metric, skip_reason = _should_emit_daily_metric(
+            snapshot_date=snapshot_date,
+            previous_date=previous_date,
+            previous_scraped_at=previous_scraped_at,
+            current_scraped_at=current_scraped_at,
+        )
+        if calculate_daily and should_emit_metric and previous_by_video:
             daily_views, matched, new_videos = calculate_account_daily_views(
                 fetched.videos,
                 previous_by_video,
                 previous_scraped_at=previous_scraped_at,
             )
+            metric_date = (
+                date.fromisoformat(snapshot_date) - timedelta(days=config.SOCIAL_SCRAPE_METRIC_LAG_DAYS)
+            ).isoformat()
             daily_metric = upsert_channel_daily_metric(
                 supabase,
-                metric_date=snapshot_date,
+                metric_date=metric_date,
                 platform=fetched.platform,
                 account_name=fetched.account_name,
                 views=daily_views,
@@ -142,6 +180,13 @@ def collect_social_account(
                     f"interval={previous_date}->{snapshot_date}; "
                     f"matched_videos={matched}; new_videos={new_videos}"
                 ),
+            )
+        elif calculate_daily and skip_reason:
+            logger.info(
+                "Skipping daily metric for %s @%s: %s",
+                platform,
+                handle,
+                skip_reason,
             )
         finish_social_scrape_run(
             supabase,

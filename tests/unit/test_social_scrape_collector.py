@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from src.services.scrapecreators_service import SocialVideoMetric
-from src.services.social_scrape_collector import calculate_account_daily_views
+from datetime import datetime, timezone
+
+from src.services.social_scrape_collector import (
+    _should_emit_daily_metric,
+    calculate_account_daily_views,
+)
 
 
 def _video(video_id: str, views: int, published_at: str) -> SocialVideoMetric:
@@ -50,3 +55,39 @@ def test_daily_views_clamp_counter_decreases_to_zero():
     assert total == 0
     assert matched == 1
     assert new_videos == 0
+
+
+def test_should_emit_daily_metric_accepts_normal_daily_interval():
+    should_emit, reason = _should_emit_daily_metric(
+        snapshot_date="2026-07-08",
+        previous_date="2026-07-07",
+        previous_scraped_at="2026-07-07T06:00:00Z",
+        current_scraped_at=datetime(2026, 7, 8, 6, 0, tzinfo=timezone.utc),
+    )
+
+    assert should_emit is True
+    assert reason is None
+
+
+def test_should_emit_daily_metric_skips_migration_gap():
+    should_emit, reason = _should_emit_daily_metric(
+        snapshot_date="2026-07-08",
+        previous_date="2026-07-06",
+        previous_scraped_at="2026-07-06T20:00:00Z",
+        current_scraped_at=datetime(2026, 7, 8, 6, 0, tzinfo=timezone.utc),
+    )
+
+    assert should_emit is False
+    assert reason == "previous_date_mismatch:2026-07-06->2026-07-07"
+
+
+def test_should_emit_daily_metric_skips_short_interval():
+    should_emit, reason = _should_emit_daily_metric(
+        snapshot_date="2026-07-08",
+        previous_date="2026-07-07",
+        previous_scraped_at="2026-07-07T20:00:00Z",
+        current_scraped_at=datetime(2026, 7, 8, 6, 0, tzinfo=timezone.utc),
+    )
+
+    assert should_emit is False
+    assert reason == "interval_too_short:10.00h"
