@@ -30,11 +30,24 @@ def _present(value: str | None) -> bool:
     return bool(value and value.strip())
 
 
+def _resolve_appstore_private_key() -> str:
+    if _present(config.APPSTORE_PRIVATE_KEY):
+        return str(config.APPSTORE_PRIVATE_KEY).strip()
+
+    if _present(config.APPSTORE_PRIVATE_KEY_PATH):
+        path = Path(str(config.APPSTORE_PRIVATE_KEY_PATH)).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"APPSTORE_PRIVATE_KEY_PATH file not found: {path}")
+        return path.read_text(encoding="utf-8").strip()
+
+    raise ValueError("App Store private key is not configured.")
+
+
 def _build_appstore_token() -> str:
     if not (
         _present(config.APPSTORE_ISSUER_ID)
         and _present(config.APPSTORE_KEY_ID)
-        and _present(config.APPSTORE_PRIVATE_KEY)
+        and (_present(config.APPSTORE_PRIVATE_KEY) or _present(config.APPSTORE_PRIVATE_KEY_PATH))
     ):
         raise ValueError("App Store credentials are incomplete.")
 
@@ -50,9 +63,10 @@ def _build_appstore_token() -> str:
         "kid": config.APPSTORE_KEY_ID,
         "typ": "JWT",
     }
+    private_key = _resolve_appstore_private_key()
     return jwt.encode(
         payload,
-        config.APPSTORE_PRIVATE_KEY,
+        private_key,
         algorithm="ES256",
         headers=headers,
     )
@@ -64,8 +78,8 @@ def _check_appstore_source() -> SourceCheckResult:
         missing.append("APPSTORE_ISSUER_ID")
     if not _present(config.APPSTORE_KEY_ID):
         missing.append("APPSTORE_KEY_ID")
-    if not _present(config.APPSTORE_PRIVATE_KEY):
-        missing.append("APPSTORE_PRIVATE_KEY")
+    if not (_present(config.APPSTORE_PRIVATE_KEY) or _present(config.APPSTORE_PRIVATE_KEY_PATH)):
+        missing.append("APPSTORE_PRIVATE_KEY or APPSTORE_PRIVATE_KEY_PATH")
 
     if missing:
         return SourceCheckResult(
@@ -119,6 +133,10 @@ def _check_appstore_source() -> SourceCheckResult:
             details.append("Примеры: " + ", ".join(app_names))
         if _present(config.APPSTORE_BUNDLE_ID):
             details.append(f"Bundle ID в env: {config.APPSTORE_BUNDLE_ID}")
+        if _present(config.APPSTORE_PRIVATE_KEY_PATH):
+            details.append("Private key source: APPSTORE_PRIVATE_KEY_PATH")
+        elif _present(config.APPSTORE_PRIVATE_KEY):
+            details.append("Private key source: APPSTORE_PRIVATE_KEY")
 
         return SourceCheckResult(
             source="App Store Connect",

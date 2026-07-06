@@ -94,6 +94,7 @@ REPORT_SCHEDULE_ENABLED: bool = _get_bool_optional("REPORT_SCHEDULE_ENABLED", Fa
 APPSTORE_ISSUER_ID: str | None = _get_optional("APPSTORE_ISSUER_ID")
 APPSTORE_KEY_ID: str | None = _get_optional("APPSTORE_KEY_ID")
 APPSTORE_PRIVATE_KEY: str | None = _get_optional("APPSTORE_PRIVATE_KEY")
+APPSTORE_PRIVATE_KEY_PATH: str | None = _get_optional("APPSTORE_PRIVATE_KEY_PATH")
 APPSTORE_BUNDLE_ID: str | None = _get_optional("APPSTORE_BUNDLE_ID")
 
 GOOGLE_PLAY_PACKAGE_NAME: str | None = _get_optional("GOOGLE_PLAY_PACKAGE_NAME")
