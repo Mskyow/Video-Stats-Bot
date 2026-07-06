@@ -71,21 +71,40 @@ MARKETING_DAILY_COLUMNS = [
     "Instagram Views",
     "TikTok Views",
     "IG Emma",
+    "IG Otty",
     "IG Sarah",
     "IG Patricia",
     "TT Ellie",
     "TT Kamil",
+    "TT Otty",
     "TT Patricia",
     "TT Maxine",
     "Updated At",
 ]
 
+MARKETING_DAILY_INSTAGRAM_COLUMNS = [
+    "IG Emma",
+    "IG Otty",
+    "IG Sarah",
+    "IG Patricia",
+]
+
+MARKETING_DAILY_TIKTOK_COLUMNS = [
+    "TT Ellie",
+    "TT Kamil",
+    "TT Otty",
+    "TT Patricia",
+    "TT Maxine",
+]
+
 MARKETING_DAILY_ACCOUNT_COLUMNS = {
     ("instagram", "emma_garcia826"): "IG Emma",
+    ("instagram", "otty.and.lotty"): "IG Otty",
     ("instagram", "sarah.mitchell13"): "IG Sarah",
     ("instagram", "patricia_amateur"): "IG Patricia",
     ("tiktok", "eli_robinsonn"): "TT Ellie",
     ("tiktok", "kamil_smith4"): "TT Kamil",
+    ("tiktok", "otty.and.lotty"): "TT Otty",
     ("tiktok", "patricia_amateur"): "TT Patricia",
     ("tiktok", "maximgrergl"): "TT Maxine",
 }
@@ -215,6 +234,11 @@ def _column_letter(index: int) -> str:
     return result
 
 
+def _column_range_formula(columns: list[str], row_index: int) -> str:
+    refs = [f"{_column_letter(MARKETING_DAILY_COLUMNS.index(column) + 1)}{row_index}" for column in columns]
+    return "=SUM(" + ",".join(refs) + ")"
+
+
 def _get_or_create_worksheet(
     spreadsheet: gspread.Spreadsheet,
     title: str,
@@ -237,17 +261,43 @@ def _get_or_create_worksheet(
                 worksheet.resize(cols=required_cols)
         except Exception:
             logger.exception("Failed to resize worksheet %s to %s columns", title, required_cols)
-    _ensure_headers(worksheet, headers)
+    headers_changed = _ensure_headers(worksheet, headers)
+    if headers_changed and title == MARKETING_DAILY_WORKSHEET_NAME:
+        end_col = _column_letter(len(headers))
+        try:
+            worksheet.format(
+                f"A1:{end_col}1",
+                {
+                    "horizontalAlignment": "CENTER",
+                    "verticalAlignment": "MIDDLE",
+                    "textFormat": {
+                        "bold": True,
+                        "foregroundColor": {"red": 1, "green": 1, "blue": 1},
+                    },
+                },
+            )
+        except Exception:
+            logger.exception("Failed to format Marketing Daily header on worksheet %s", worksheet.title)
     return worksheet
 
 
-def _ensure_headers(worksheet: gspread.Worksheet, headers: list[str]) -> None:
+def _ensure_headers(worksheet: gspread.Worksheet, headers: list[str]) -> bool:
+    existing_headers: list[str] = []
+    try:
+        existing_headers = worksheet.row_values(1)
+    except Exception:
+        logger.exception("Failed to read header row from worksheet %s", worksheet.title)
+
+    if existing_headers[: len(headers)] == headers:
+        return False
+
     end_col = _column_letter(len(headers))
     worksheet.update(
         range_name=f"A1:{end_col}1",
         values=[headers],
         value_input_option="USER_ENTERED",
     )
+    return True
 
 
 def _format_sheet_range(
@@ -653,8 +703,8 @@ def _build_marketing_daily_wide_row(
         _parse_int(metric_data.get("views") if "views" in metric_data else metric_data.get("Views"))
     )
     row["Total Views"] = f"=SUM(C{row_index}:D{row_index})"
-    row["Instagram Views"] = f"=SUM(E{row_index}:G{row_index})"
-    row["TikTok Views"] = f"=SUM(H{row_index}:K{row_index})"
+    row["Instagram Views"] = _column_range_formula(MARKETING_DAILY_INSTAGRAM_COLUMNS, row_index)
+    row["TikTok Views"] = _column_range_formula(MARKETING_DAILY_TIKTOK_COLUMNS, row_index)
     row["Updated At"] = str(
         metric_data.get("updated_at")
         or metric_data.get("Updated At")
@@ -700,8 +750,6 @@ def export_marketing_daily_to_sheet(metric_data: dict[str, Any]) -> bool:
             MARKETING_DAILY_WORKSHEET_NAME,
             MARKETING_DAILY_COLUMNS,
         )
-        end_col = _column_letter(len(MARKETING_DAILY_COLUMNS))
-        _format_sheet_range(worksheet, f"A1:{end_col}1", bold=True)
 
         records = _worksheet_records(worksheet, MARKETING_DAILY_COLUMNS)
         for record in records:
