@@ -236,7 +236,7 @@ def _column_letter(index: int) -> str:
 
 def _column_range_formula(columns: list[str], row_index: int) -> str:
     refs = [f"{_column_letter(MARKETING_DAILY_COLUMNS.index(column) + 1)}{row_index}" for column in columns]
-    return "=SUM(" + ",".join(refs) + ")"
+    return "=" + "+".join(refs)
 
 
 def _get_or_create_worksheet(
@@ -702,7 +702,7 @@ def _build_marketing_daily_wide_row(
     row[account_column] = _format_number(
         _parse_int(metric_data.get("views") if "views" in metric_data else metric_data.get("Views"))
     )
-    row["Total Views"] = f"=SUM(C{row_index}:D{row_index})"
+    row["Total Views"] = f"=C{row_index}+D{row_index}"
     row["Instagram Views"] = _column_range_formula(MARKETING_DAILY_INSTAGRAM_COLUMNS, row_index)
     row["TikTok Views"] = _column_range_formula(MARKETING_DAILY_TIKTOK_COLUMNS, row_index)
     row["Updated At"] = str(

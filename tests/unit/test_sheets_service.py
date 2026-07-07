@@ -61,9 +61,9 @@ class TestMarketingDailyWideRows:
         assert row["Date"] == "2026-06-29"
         assert row["IG Sarah"] == "123"
         assert row["TT Ellie"] == ""
-        assert row["Instagram Views"] == "=SUM(E2,F2,G2,H2)"
-        assert row["TikTok Views"] == "=SUM(I2,J2,K2,L2,M2)"
-        assert row["Total Views"] == "=SUM(C2:D2)"
+        assert row["Instagram Views"] == "=E2+F2+G2+H2"
+        assert row["TikTok Views"] == "=I2+J2+K2+L2+M2"
+        assert row["Total Views"] == "=C2+D2"
 
     def test_tiktok_update_preserves_existing_instagram_value(self):
         row = _build_marketing_daily_wide_row(
@@ -80,7 +80,7 @@ class TestMarketingDailyWideRows:
         assert row is not None
         assert row["IG Sarah"] == "123"
         assert row["TT Ellie"] == "456"
-        assert row["Total Views"] == "=SUM(C3:D3)"
+        assert row["Total Views"] == "=C3+D3"
 
     def test_otty_accounts_map_into_dedicated_columns(self):
         ig_row = _build_marketing_daily_wide_row(
