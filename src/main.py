@@ -151,6 +151,17 @@ async def collect_social_accounts_job(bot_instance: Bot) -> None:
         await bot_instance.send_message(**send_kwargs)
 
 
+async def sync_app_store_analytics_job() -> None:
+    """Refresh the rolling App Store window; pending dates are retried idempotently."""
+    from src.services.app_store_analytics_service import sync_app_store_analytics
+
+    try:
+        result = await asyncio.to_thread(sync_app_store_analytics)
+        logger.info("App Store analytics sync finished: %s", result)
+    except Exception:
+        logger.exception("App Store analytics sync failed")
+
+
 def _create_report_scheduler(bot: Bot):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
@@ -183,6 +194,36 @@ def _create_report_scheduler(bot: Bot):
             max_instances=1,
             misfire_grace_time=3600,
         )
+    if config.APPSTORE_ANALYTICS_ENABLED:
+        scheduler.add_job(
+            sync_app_store_analytics_job,
+            CronTrigger(
+                hour=config.APPSTORE_ANALYTICS_HOUR,
+                minute=config.APPSTORE_ANALYTICS_MINUTE,
+                timezone=config.APPSTORE_ANALYTICS_TIMEZONE,
+            ),
+            id="daily_app_store_analytics",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
+        # Apple often publishes D-1 later than 09:00. Two same-day retries are
+        # safe because every sheet is rebuilt by source date and record key.
+        for retry_hour in (13, 18):
+            scheduler.add_job(
+                sync_app_store_analytics_job,
+                CronTrigger(
+                    hour=retry_hour,
+                    minute=0,
+                    timezone=config.APPSTORE_ANALYTICS_TIMEZONE,
+                ),
+                id=f"retry_app_store_analytics_{retry_hour}",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=3600,
+            )
     scheduler.start()
     if config.REPORT_SCHEDULE_ENABLED:
         logger.info(
@@ -198,6 +239,13 @@ def _create_report_scheduler(bot: Bot):
             "Social scrape scheduled daily at %02d:%02d UTC.",
             config.SOCIAL_SCRAPE_HOUR_UTC,
             config.SOCIAL_SCRAPE_MINUTE_UTC,
+        )
+    if config.APPSTORE_ANALYTICS_ENABLED:
+        logger.info(
+            "App Store analytics scheduled daily at %02d:%02d %s with retries at 13:00 and 18:00.",
+            config.APPSTORE_ANALYTICS_HOUR,
+            config.APPSTORE_ANALYTICS_MINUTE,
+            config.APPSTORE_ANALYTICS_TIMEZONE,
         )
     return scheduler
 
