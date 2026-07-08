@@ -291,6 +291,33 @@ def _ensure_headers(worksheet: gspread.Worksheet, headers: list[str]) -> bool:
     if existing_headers[: len(headers)] == headers:
         return False
 
+    # Adding an account column in the middle of Marketing Daily must move the
+    # existing cells with their old headers. Replacing row 1 alone relabels
+    # every following value and silently attributes metrics to wrong accounts.
+    if existing_headers:
+        existing_values = worksheet.get_all_values()
+        old_indexes = {header: index for index, header in enumerate(existing_headers) if header}
+        remapped_rows: list[list[str]] = []
+        for existing_row in existing_values[1:]:
+            remapped_rows.append(
+                [
+                    existing_row[old_indexes[header]]
+                    if header in old_indexes and old_indexes[header] < len(existing_row)
+                    else ""
+                    for header in headers
+                ]
+            )
+
+        if remapped_rows:
+            old_end_col = _column_letter(max(len(existing_headers), len(headers)))
+            worksheet.batch_clear([f"A2:{old_end_col}{len(remapped_rows) + 1}"])
+            end_col = _column_letter(len(headers))
+            worksheet.update(
+                range_name=f"A2:{end_col}{len(remapped_rows) + 1}",
+                values=remapped_rows,
+                value_input_option="USER_ENTERED",
+            )
+
     end_col = _column_letter(len(headers))
     worksheet.update(
         range_name=f"A1:{end_col}1",

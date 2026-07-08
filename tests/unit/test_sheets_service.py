@@ -35,6 +35,7 @@ from src.services.sheets_service import (
     _calculate_age_hours,
     _get_client,
     _get_credentials,
+    _ensure_headers,
     export_video_to_sheet,
     get_marketing_funnel_daily_summary,
     import_marketing_funnel_csv_rows,
@@ -119,6 +120,26 @@ class TestMarketingDailyWideRows:
         )
         assert row is None
 
+    def test_header_change_moves_existing_values_by_header_name(self):
+        worksheet = FakeWorksheet("Marketing Daily")
+        worksheet.values = [
+            ["Date", "IG Emma", "IG Sarah", "TT Patricia", "Updated At"],
+            ["2026-07-05", "1384", "2655", "609", "old timestamp"],
+        ]
+
+        changed = _ensure_headers(
+            worksheet,
+            ["Date", "IG Emma", "IG Otty", "IG Sarah", "TT Patricia", "TT Maxine", "Updated At"],
+        )
+
+        assert changed is True
+        assert worksheet.values[0][:7] == [
+            "Date", "IG Emma", "IG Otty", "IG Sarah", "TT Patricia", "TT Maxine", "Updated At"
+        ]
+        assert worksheet.values[1][:7] == [
+            "2026-07-05", "1384", "", "2655", "609", "", "old timestamp"
+        ]
+
 
 class FakeWorksheet:
     def __init__(self, title: str):
@@ -153,6 +174,11 @@ class FakeWorksheet:
 
     def get_all_values(self):
         return self.values
+
+    def row_values(self, row_index):
+        if row_index <= 0 or row_index > len(self.values):
+            return []
+        return self.values[row_index - 1]
 
     def batch_clear(self, ranges):
         return None
