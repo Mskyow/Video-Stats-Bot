@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 FACTS_SHEET = "Store Daily Facts"
 TOTAL_SHEET = "Store Total"
+FUNNEL_SHEET = "App Store Funnel"
 ASA_SHEET = "ASA"
 VIRAL_SHEET = "Viral + Organic"
 OVERVIEW_SHEET = "Acquisition Overview"
@@ -44,6 +45,12 @@ TOTAL_HEADERS = [
     "Product Page Views", "First-Time Downloads", "Total Downloads", "Redownloads",
     "Purchases", "Impression Frequency", "PPV Frequency", "Page Visit Rate",
     "Page Conversion", "Acquisition Conversion", "Retrieved At",
+]
+FUNNEL_HEADERS = [
+    "Date", "Impressions (Total)", "Impression to Product Page View",
+    "Product Page Views (Total)", "Product Page View to First-Time Download",
+    "First-Time Downloads", "First-Time Download to Trial (calendar)", "Free Trial Starts",
+    "Trial to Paid (calendar)", "Paid from Trial", "Direct Paid Purchases",
 ]
 ASA_HEADERS = [
     "Date", "Status", "Attribution Source", "Campaign ID", "Campaign Name", "Country",
@@ -133,10 +140,7 @@ class AppStoreAnalyticsClient:
             )
             for report in reports:
                 name = str((report.get("attributes") or {}).get("name") or "")
-                if "Detailed" in name or not (
-                    "App Store Discovery and Engagement" in name
-                    or "App Store Downloads" in name
-                ):
+                if not _is_supported_report(name):
                     continue
                 instances = self._all(
                     f"{APPSTORE_API_BASE}/analyticsReports/{report['id']}/instances",
@@ -163,6 +167,15 @@ class AppStoreAnalyticsClient:
                     attrs = instance.get("attributes") or {}
                     files.append(ReportFile(name, instance_id, str(attrs.get("processingDate") or ""), rows))
         return files
+
+
+def _is_supported_report(name: str) -> bool:
+    return "Detailed" not in name and (
+        "App Store Discovery and Engagement" in name
+        or "App Downloads" in name
+        or name == "App Store Purchases Standard"
+        or name == "App Store Subscription Event Report Standard"
+    )
 
 
 def _number(row: dict[str, str], key: str) -> int | None:
@@ -350,6 +363,115 @@ def _total_values(days: list[date], facts: list[dict[str, Any]]) -> list[list[An
     return rows
 
 
+def _commerce_daily(files: list[ReportFile], days: list[date]) -> dict[str, dict[str, int]]:
+    """Calendar-date trial and paid events from Apple's reports."""
+    available_dates = {day.isoformat() for day in days}
+    newest: dict[tuple[str, str], ReportFile] = {}
+    for file in files:
+        for item in file.rows:
+            source_date = str(item.get("Event Date") or item.get("Date") or "")
+            if source_date not in available_dates:
+                continue
+            key = (file.name, source_date)
+            if key not in newest or file.processing_date >= newest[key].processing_date:
+                newest[key] = file
+
+    metrics: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for file in {item.instance_id: item for item in newest.values()}.values():
+        for item in file.rows:
+            source_date = str(item.get("Event Date") or item.get("Date") or "")
+            if newest.get((file.name, source_date)) is not file:
+                continue
+            if file.name == "App Store Purchases Standard":
+                sales = float(str(item.get("Sales in USD") or "0").replace(",", "") or 0)
+                if sales > 0:
+                    metrics[source_date]["Direct Paid Purchases"] += _number(item, "Purchases") or 0
+                continue
+            if file.name != "App Store Subscription Event Report Standard":
+                continue
+            event_group = str(item.get("Event Group") or "").lower()
+            event_name = str(item.get("Event Name") or "").lower()
+            count = _number(item, "Counts") or 0
+            if event_group == "offer start" and "free trial" in event_name:
+                metrics[source_date]["Free Trial Starts"] += count
+            elif event_group == "conversion to standard price" and "introductory offer" in event_name:
+                metrics[source_date]["Paid from Trial"] += count
+    return metrics
+
+
+def _complete_funnel_dates(files: list[ReportFile], days: list[date]) -> set[str]:
+    """Dates for which Apple has published both top-funnel report types.
+
+    Apple publishes Downloads and Discovery reports independently. A date with
+    only one of them is not a usable funnel row, even if one metric is present.
+    """
+    expected = {day.isoformat() for day in days}
+    coverage: dict[str, set[str]] = defaultdict(set)
+    source_reports_seen = False
+    for file in files:
+        if "App Store Discovery and Engagement" in file.name:
+            report_type = "engagement"
+        elif "App Downloads" in file.name:
+            report_type = "downloads"
+        else:
+            continue
+        source_reports_seen = True
+        for item in file.rows:
+            source_date = str(item.get("Date") or "")
+            if source_date in expected:
+                coverage[source_date].add(report_type)
+    if not source_reports_seen:
+        return expected
+    return {source_date for source_date, types in coverage.items() if types == {"engagement", "downloads"}}
+
+
+def _funnel_values(
+    days: list[date], facts: list[dict[str, Any]], files: list[ReportFile] | None = None,
+) -> list[list[Any]]:
+    """Apple calendar funnel; downstream ratios are explicitly daily snapshots."""
+    commerce = _commerce_daily(files or [], days)
+    complete_dates = _complete_funnel_dates(files or [], days)
+    sums: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for fact in facts:
+        if fact["Aggregation Scope"] == "TOTAL" or fact["Data Status"] != "complete":
+            continue
+        for field in ("Impressions", "Product Page Views", "First-Time Downloads"):
+            value = fact.get(field)
+            if value not in (None, ""):
+                sums[fact["Date"]][field] += int(value)
+
+    rows: list[list[Any]] = []
+    for row_number, day in enumerate(days, start=3):
+        if day.isoformat() not in complete_dates:
+            rows.append([day.isoformat(), "", "", "", "", "", "", "", "", "", ""])
+            continue
+        aggregate = sums.get(day.isoformat(), {})
+        commercial = commerce.get(day.isoformat(), {})
+        rows.append([
+            day.isoformat(),
+            aggregate.get("Impressions", ""),
+            f'=IF(D{row_number}="";"";IFERROR(D{row_number}/B{row_number};""))',
+            aggregate.get("Product Page Views", ""),
+            f'=IF(F{row_number}="";"";IFERROR(F{row_number}/D{row_number};""))',
+            aggregate.get("First-Time Downloads", ""),
+            f'=IF(F{row_number}="";"";IFERROR(H{row_number}/F{row_number};""))',
+            commercial.get("Free Trial Starts", 0),
+            f'=IF(H{row_number}=0;"";IFERROR(J{row_number}/H{row_number};""))',
+            commercial.get("Paid from Trial", 0),
+            commercial.get("Direct Paid Purchases", 0),
+        ])
+
+    end_row = len(rows) + 2
+    return [[
+        "TOTAL", f'=SUM(B3:B{end_row})', '=IF(D2="";"";IFERROR(D2/B2;""))',
+        f'=SUM(D3:D{end_row})', '=IF(F2="";"";IFERROR(F2/D2;""))',
+        f'=IF(COUNTA(F3:F{end_row})=0;"";SUM(F3:F{end_row}))',
+        '=IF(F2=0;"";IFERROR(H2/F2;""))', f'=SUM(H3:H{end_row})',
+        '=IF(H2=0;"";IFERROR(J2/H2;""))', f'=SUM(J3:J{end_row})',
+        f'=SUM(K3:K{end_row})',
+    ], *rows]
+
+
 def _asa_values(days: list[date], facts: list[dict[str, Any]]) -> list[list[Any]]:
     rows: list[list[Any]] = []
     for fact in facts:
@@ -476,27 +598,35 @@ def sync_app_store_analytics(*, start_date: str | None = None, target_date: str 
     facts = _add_availability_rows(app, facts, days, pre_release)
 
     book = _open_spreadsheet(_get_client())
-    payloads = {
-        FACTS_SHEET: (FACT_HEADERS, _facts_values(facts)),
-        TOTAL_SHEET: (TOTAL_HEADERS, _total_values(days, facts)),
-        ASA_SHEET: (ASA_HEADERS, _asa_values(days, facts)),
-        VIRAL_SHEET: (VIRAL_HEADERS, _viral_values(days, facts)),
-        OVERVIEW_SHEET: (OVERVIEW_HEADERS, _overview_values(days, facts)),
-        QUALITY_SHEET: (QUALITY_HEADERS, _quality_values(facts)),
-    }
+    payloads = {FUNNEL_SHEET: (FUNNEL_HEADERS, _funnel_values(days, facts, files))}
     for title, (headers, rows) in payloads.items():
         worksheet = _sheet(book, title, headers)
+        if title == FUNNEL_SHEET:
+            worksheet.batch_clear([f"H2:K{worksheet.row_count}"])
         _replace(worksheet, headers, rows)
         if rows:
             percent_columns = {
                 TOTAL_SHEET: ("K", "O"), ASA_SHEET: ("O", "Q"),
+                FUNNEL_SHEET: ("C", "I"),
                 VIRAL_SHEET: ("M", "N"), OVERVIEW_SHEET: ("J", "M"),
             }.get(title)
             if percent_columns:
-                worksheet.format(
-                    f"{percent_columns[0]}2:{percent_columns[1]}{len(rows)+1}",
-                    {"numberFormat": {"type": "PERCENT", "pattern": "0.00%"}},
-                )
+                if title == FUNNEL_SHEET:
+                    for column in ("C", "E", "G", "I"):
+                        worksheet.format(
+                            f"{column}2:{column}{len(rows)+1}",
+                            {"numberFormat": {"type": "PERCENT", "pattern": "0.00%"}},
+                        )
+                    for column in ("B", "D", "F", "H", "J", "K"):
+                        worksheet.format(
+                            f"{column}2:{column}{len(rows)+1}",
+                            {"numberFormat": {"type": "NUMBER", "pattern": "0"}},
+                        )
+                else:
+                    worksheet.format(
+                        f"{percent_columns[0]}2:{percent_columns[1]}{len(rows)+1}",
+                        {"numberFormat": {"type": "PERCENT", "pattern": "0.00%"}},
+                    )
 
     status = "success" if files else ("pre_release_no_data" if pre_release else "pending")
     return {

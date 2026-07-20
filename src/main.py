@@ -158,6 +158,9 @@ async def sync_app_store_analytics_job() -> None:
     try:
         result = await asyncio.to_thread(sync_app_store_analytics)
         logger.info("App Store analytics sync finished: %s", result)
+        from src.services.adapty_analytics_service import sync_adapty_install_cohorts
+        adapty_result = await asyncio.to_thread(sync_adapty_install_cohorts)
+        logger.info("Adapty install cohort sync finished: %s", adapty_result)
     except Exception:
         logger.exception("App Store analytics sync failed")
 
