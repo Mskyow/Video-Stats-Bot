@@ -198,6 +198,8 @@ def _create_report_scheduler(bot: Bot):
             misfire_grace_time=3600,
         )
     if config.APPSTORE_ANALYTICS_ENABLED:
+        # A deploy should refresh the sheet immediately; daily runs then keep it current.
+        asyncio.create_task(sync_app_store_analytics_job(), name="startup_app_store_analytics")
         scheduler.add_job(
             sync_app_store_analytics_job,
             CronTrigger(
