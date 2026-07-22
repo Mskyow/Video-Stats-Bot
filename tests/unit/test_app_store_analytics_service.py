@@ -59,6 +59,22 @@ def test_unique_metrics_remain_source_grain_and_store_total_unique_is_blank():
     assert totals[0][14].startswith("=IF(")
 
 
+def test_product_page_views_match_apple_dashboard_page_type_rule():
+    engagement = ReportFile(
+        "App Store Discovery and Engagement", "eng", "2026-07-10",
+        [
+            {"Date": "2026-07-07", "Source Type": "App Store search", "Territory": "US", "Device": "iPhone", "Event": "Page View", "Page Type": "Product Page", "Counts": "4", "Unique Counts": "3"},
+            {"Date": "2026-07-07", "Source Type": "App Store browse", "Territory": "US", "Device": "iPhone", "Event": "Page View", "Page Type": "Store Sheet", "Counts": "2", "Unique Counts": "2"},
+            {"Date": "2026-07-07", "Source Type": "App Store browse", "Territory": "US", "Device": "iPhone", "Event": "Page View", "Page Type": "Developer Page", "Counts": "5", "Unique Counts": "4"},
+        ],
+    )
+
+    facts = _extract_facts(APP, [engagement], date(2026, 7, 7), date(2026, 7, 7))
+
+    assert sum(fact["Product Page Views"] or 0 for fact in facts) == 6
+    assert sum(fact["Unique Product Page Views"] or 0 for fact in facts) == 5
+
+
 def test_funnel_values_have_total_row_and_step_conversions():
     engagement = ReportFile(
         "App Store Discovery and Engagement", "eng", "2026-07-10",

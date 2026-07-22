@@ -237,7 +237,9 @@ def _extract_facts(app: dict[str, Any], files: list[ReportFile], start: date, en
                     fact["Impressions"] = (fact["Impressions"] or 0) + count
                     if unique is not None:
                         fact["Unique Impressions"] = (fact["Unique Impressions"] or 0) + unique
-                elif event == "page view" and page_type == "product page":
+                # The App Store dashboard's Product Page Views includes Store
+                # sheet visits, but excludes views of our developer page.
+                elif event == "page view" and page_type != "developer page":
                     fact["Product Page Views"] = (fact["Product Page Views"] or 0) + count
                     if unique is not None:
                         fact["Unique Product Page Views"] = (fact["Unique Product Page Views"] or 0) + unique
