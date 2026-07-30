@@ -122,8 +122,15 @@ async def send_daily_report_job(bot_instance: Bot) -> None:
 
 
 async def collect_social_accounts_job(bot_instance: Bot) -> None:
+    from src.services.content_comments_service import sync_eligible_video_comments
+    from src.services.content_format_service import sync_content_format_assignments
     from src.bot.handlers.scrapecreators import format_configured_collection_results
-    from src.services.sheets_service import queue_marketing_daily_export
+    from src.services.content_performance_service import list_content_performance_rows
+    from src.services.sheets_service import (
+        export_account_map_to_sheet,
+        queue_content_performance_export,
+        queue_marketing_daily_export,
+    )
     from src.services.social_scrape_collector import collect_configured_social_accounts
 
     if not config.SCRAPECREATORS_API_KEY:
@@ -135,9 +142,41 @@ async def collect_social_accounts_job(bot_instance: Bot) -> None:
     for result in results:
         if result.daily_metric:
             queue_marketing_daily_export(result.daily_metric)
+    performance_rows = list_content_performance_rows(supabase_client)
+    try:
+        format_result = await asyncio.to_thread(
+            sync_content_format_assignments,
+            supabase_client,
+            rows=performance_rows,
+        )
+    except Exception as exc:
+        logger.exception("Content format matching failed")
+        format_result = {"status": "error", "error": str(exc)}
+    try:
+        comment_result = await asyncio.to_thread(
+            sync_eligible_video_comments,
+            supabase_client,
+        )
+    except Exception as exc:
+        logger.exception("Content comment enrichment failed")
+        comment_result = {"status": "error", "error": str(exc)}
+    try:
+        account_rows = (
+            supabase_client.table("social_scrape_accounts")
+            .select("platform,handle,country")
+            .execute()
+            .data
+            or []
+        )
+        await asyncio.to_thread(export_account_map_to_sheet, account_rows)
+    except Exception:
+        logger.exception("Account Map export failed")
+    queue_content_performance_export(list_content_performance_rows(supabase_client))
     logger.info(
-        "Scheduled social scrape finished: %s",
+        "Scheduled social scrape finished: accounts=%s formats=%s comments=%s",
         [(item.platform, item.handle, item.status, item.videos_saved) for item in results],
+        format_result,
+        comment_result,
     )
 
     if config.SOCIAL_SCRAPE_SEND_TO_TELEGRAM and config.REPORT_CHAT_ID:

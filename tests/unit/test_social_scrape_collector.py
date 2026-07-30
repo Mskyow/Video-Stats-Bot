@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import pytest
+
 from src.services.scrapecreators_service import SocialVideoMetric
 from datetime import datetime, timezone
 
 from src.services.social_scrape_collector import (
+    IncompleteSocialSnapshotError,
+    SocialScrapeResult,
     _should_emit_daily_metric,
+    _validate_snapshot_completeness,
     calculate_account_daily_views,
+    collect_configured_social_accounts,
 )
 
 
@@ -91,3 +97,67 @@ def test_should_emit_daily_metric_skips_short_interval():
 
     assert should_emit is False
     assert reason == "interval_too_short:10.00h"
+
+
+def test_snapshot_completeness_rejects_large_drop(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.social_scrape_collector.config.SOCIAL_SCRAPE_MIN_BASELINE_VIDEOS",
+        20,
+    )
+    monkeypatch.setattr(
+        "src.services.social_scrape_collector.config.SOCIAL_SCRAPE_MIN_SNAPSHOT_RATIO",
+        0.5,
+    )
+
+    with pytest.raises(IncompleteSocialSnapshotError, match="received 19 videos"):
+        _validate_snapshot_completeness(
+            platform="TikTok",
+            handle="kamil_smith4",
+            current_count=19,
+            previous_count=54,
+        )
+
+
+def test_failed_account_is_retried_after_primary_pass(monkeypatch):
+    account = {
+        "id": "account-1",
+        "platform": "TikTok",
+        "handle": "example",
+        "display_name": "Example",
+    }
+    attempts = []
+
+    monkeypatch.setattr(
+        "src.services.social_scrape_collector.list_enabled_social_scrape_accounts",
+        lambda _supabase: [account],
+    )
+    monkeypatch.setattr(
+        "src.services.social_scrape_collector.config.SOCIAL_SCRAPE_RETRY_FAILED_ACCOUNTS",
+        True,
+    )
+
+    def fake_collect(_supabase, _account, calculate_daily=True):
+        attempts.append(calculate_daily)
+        if len(attempts) == 1:
+            raise RuntimeError("temporary failure")
+        return SocialScrapeResult(
+            platform="TikTok",
+            handle="example",
+            display_name="Example",
+            status="success",
+            pages_requested=1,
+            videos_received=1,
+            videos_saved=1,
+            total_lifetime_views=100,
+            start_video_found=True,
+        )
+
+    monkeypatch.setattr(
+        "src.services.social_scrape_collector.collect_social_account",
+        fake_collect,
+    )
+
+    results = collect_configured_social_accounts(object())
+
+    assert len(attempts) == 2
+    assert results[0].status == "success"

@@ -83,6 +83,19 @@ GOOGLE_CREDENTIALS_JSON: str | None = _get_optional("GOOGLE_CREDENTIALS_JSON")
 GOOGLE_SHEET_ID: str | None = _get_optional("GOOGLE_SHEET_ID")
 # Название листа в таблице (например "Hooks CRM" или "Hook Analytics")
 GOOGLE_SHEET_WORKSHEET_NAME: str = _get_optional("GOOGLE_SHEET_WORKSHEET_NAME") or "Hooks CRM"
+CONTENT_FORMATS_SHEET_ID: str = (
+    _get_optional("CONTENT_FORMATS_SHEET_ID")
+    or "1uvhjgRWQhgrRC4bbhsrrlZHOwQ4m9IXd-RwmrW8pGYo"
+)
+CONTENT_FORMATS_WORKSHEET_GID: int = _get_int_optional(
+    "CONTENT_FORMATS_WORKSHEET_GID", 1584230146
+)
+CONTENT_FORMATS_SOURCE_NAME: str = (
+    _get_optional("CONTENT_FORMATS_SOURCE_NAME") or "ТЗ Otty"
+)
+CONTENT_PERFORMANCE_TIMEZONE: str = (
+    _get_optional("CONTENT_PERFORMANCE_TIMEZONE") or "Europe/Minsk"
+)
 REPORT_CHAT_ID: int | None = int(v) if (v := _get_optional("REPORT_CHAT_ID")) else None
 REPORT_TOPIC_ID: int | None = int(v) if (v := _get_optional("REPORT_TOPIC_ID")) else None
 REPORT_TIMEZONE: str = _get_optional("REPORT_TIMEZONE") or "Europe/Minsk"
@@ -119,6 +132,12 @@ SCRAPECREATORS_API_KEY: str | None = _get_optional("SCRAPECREATORS_API_KEY")
 SCRAPECREATORS_TIMEOUT_SEC: float = max(
     5.0, _get_float_optional("SCRAPECREATORS_TIMEOUT_SEC", 60.0)
 )
+SCRAPECREATORS_MAX_RETRIES: int = max(
+    0, _get_int_optional("SCRAPECREATORS_MAX_RETRIES", 3)
+)
+SCRAPECREATORS_RETRY_BACKOFF_SEC: float = max(
+    0.0, _get_float_optional("SCRAPECREATORS_RETRY_BACKOFF_SEC", 1.0)
+)
 SOCIAL_SCRAPE_ENABLED: bool = _get_bool_optional("SOCIAL_SCRAPE_ENABLED", True)
 SOCIAL_SCRAPE_HOUR_UTC: int = min(
     23, max(0, _get_int_optional("SOCIAL_SCRAPE_HOUR_UTC", 6))
@@ -142,6 +161,31 @@ SOCIAL_SCRAPE_INTERVAL_MAX_HOURS: float = max(
 )
 SOCIAL_SCRAPE_SEND_TO_TELEGRAM: bool = _get_bool_optional(
     "SOCIAL_SCRAPE_SEND_TO_TELEGRAM", False
+)
+SOCIAL_SCRAPE_RETRY_FAILED_ACCOUNTS: bool = _get_bool_optional(
+    "SOCIAL_SCRAPE_RETRY_FAILED_ACCOUNTS", True
+)
+SOCIAL_SCRAPE_MIN_BASELINE_VIDEOS: int = max(
+    1, _get_int_optional("SOCIAL_SCRAPE_MIN_BASELINE_VIDEOS", 20)
+)
+SOCIAL_SCRAPE_BASELINE_LOOKBACK_DAYS: int = max(
+    1, _get_int_optional("SOCIAL_SCRAPE_BASELINE_LOOKBACK_DAYS", 7)
+)
+SOCIAL_SCRAPE_MIN_SNAPSHOT_RATIO: float = min(
+    1.0,
+    max(0.0, _get_float_optional("SOCIAL_SCRAPE_MIN_SNAPSHOT_RATIO", 0.5)),
+)
+CONTENT_COMMENT_VIEW_THRESHOLD: int = max(
+    1, _get_int_optional("CONTENT_COMMENT_VIEW_THRESHOLD", 50_000)
+)
+CONTENT_COMMENT_TRACKING_DAYS: int = max(
+    1, _get_int_optional("CONTENT_COMMENT_TRACKING_DAYS", 5)
+)
+CONTENT_COMMENT_MAX_ANALYZED: int = max(
+    1, _get_int_optional("CONTENT_COMMENT_MAX_ANALYZED", 2_000)
+)
+CONTENT_COMMENT_AI_BATCH_SIZE: int = max(
+    20, _get_int_optional("CONTENT_COMMENT_AI_BATCH_SIZE", 200)
 )
 
 # Лимит одновременных запросов к AI

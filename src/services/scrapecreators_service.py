@@ -6,16 +6,26 @@ therefore calculated by our code as deltas between saved snapshots.
 """
 from __future__ import annotations
 
+import hashlib
+import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 import requests
 
-from src.config import SCRAPECREATORS_API_KEY, SCRAPECREATORS_TIMEOUT_SEC
+from src.config import (
+    SCRAPECREATORS_API_KEY,
+    SCRAPECREATORS_MAX_RETRIES,
+    SCRAPECREATORS_RETRY_BACKOFF_SEC,
+    SCRAPECREATORS_TIMEOUT_SEC,
+)
 
 
 BASE_URL = "https://api.scrapecreators.com"
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+logger = logging.getLogger(__name__)
 
 
 class ScrapeCreatorsError(RuntimeError):
@@ -50,6 +60,22 @@ class SocialAccountFetch:
     start_video_found: bool | None
     has_more: bool
     max_pages_reached: bool
+
+
+@dataclass(frozen=True)
+class SocialComment:
+    comment_id: str
+    text: str
+    published_at: str | None
+
+
+@dataclass(frozen=True)
+class SocialCommentsFetch:
+    platform: str
+    comments: list[SocialComment]
+    source_total: int | None
+    credits_charged: int
+    truncated: bool
 
 
 def _clean_handle(handle: str) -> str:
@@ -88,21 +114,79 @@ class ScrapeCreatorsClient:
             raise ScrapeCreatorsError("SCRAPECREATORS_API_KEY is not configured")
 
     def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
-        response = requests.get(
-            BASE_URL + path,
-            headers={"x-api-key": self.api_key},
-            params=params,
-            timeout=SCRAPECREATORS_TIMEOUT_SEC,
-        )
-        try:
-            data = response.json()
-        except ValueError as exc:
-            raise ScrapeCreatorsError(f"Non-JSON response: HTTP {response.status_code}") from exc
+        attempts = SCRAPECREATORS_MAX_RETRIES + 1
+        last_error: ScrapeCreatorsError | None = None
 
-        if response.status_code >= 400:
+        for attempt in range(1, attempts + 1):
+            try:
+                response = requests.get(
+                    BASE_URL + path,
+                    headers={"x-api-key": self.api_key},
+                    params=params,
+                    timeout=SCRAPECREATORS_TIMEOUT_SEC,
+                )
+            except requests.RequestException as exc:
+                last_error = ScrapeCreatorsError(
+                    f"{type(exc).__name__}: {str(exc)[:300]}"
+                )
+                if attempt >= attempts:
+                    raise last_error from exc
+                self._log_retry(path, params, attempt, attempts, str(last_error))
+                time.sleep(self._retry_delay(attempt))
+                continue
+
+            try:
+                data = response.json()
+            except ValueError as exc:
+                last_error = ScrapeCreatorsError(
+                    f"Non-JSON response: HTTP {response.status_code}"
+                )
+                if response.status_code not in RETRYABLE_STATUS_CODES or attempt >= attempts:
+                    raise last_error from exc
+                self._log_retry(path, params, attempt, attempts, str(last_error))
+                time.sleep(self._retry_delay(attempt, response=response))
+                continue
+
+            if response.status_code < 400:
+                return data
+
             message = data.get("message") or data.get("error") or str(data)[:300]
-            raise ScrapeCreatorsError(f"HTTP {response.status_code}: {message}")
-        return data
+            last_error = ScrapeCreatorsError(f"HTTP {response.status_code}: {message}")
+            if response.status_code not in RETRYABLE_STATUS_CODES or attempt >= attempts:
+                raise last_error
+            self._log_retry(path, params, attempt, attempts, str(last_error))
+            time.sleep(self._retry_delay(attempt, response=response))
+
+        raise last_error or ScrapeCreatorsError("ScrapeCreators request failed")
+
+    @staticmethod
+    def _retry_delay(attempt: int, *, response: requests.Response | None = None) -> float:
+        if response is not None:
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    return min(60.0, max(0.0, float(retry_after)))
+                except ValueError:
+                    pass
+        return min(30.0, SCRAPECREATORS_RETRY_BACKOFF_SEC * (2 ** (attempt - 1)))
+
+    @staticmethod
+    def _log_retry(
+        path: str,
+        params: dict[str, Any],
+        attempt: int,
+        attempts: int,
+        error: str,
+    ) -> None:
+        logger.warning(
+            "ScrapeCreators retry: path=%s handle=%s cursor=%s attempt=%s/%s error=%s",
+            path,
+            params.get("handle"),
+            params.get("max_cursor") or params.get("next_max_id") or params.get("cursor"),
+            attempt + 1,
+            attempts,
+            error,
+        )
 
     @staticmethod
     def _instagram_metric(
@@ -306,6 +390,117 @@ class ScrapeCreatorsClient:
         if normalized in {"tiktok", "tik tok", "tt"}:
             return self.fetch_tiktok_videos(handle)
         raise ScrapeCreatorsError(f"Unsupported platform: {platform}")
+
+    @staticmethod
+    def _comment_id(
+        *,
+        platform: str,
+        video_url: str,
+        item: dict[str, Any],
+        text: str,
+        published_at: str | None,
+    ) -> str:
+        direct = item.get("cid") or item.get("id")
+        if direct:
+            return str(direct)
+        fallback = "\n".join((platform, video_url, published_at or "", text))
+        return "hash:" + hashlib.sha256(fallback.encode("utf-8")).hexdigest()
+
+    def fetch_video_comments(
+        self,
+        platform: str,
+        video_url: str,
+        *,
+        max_comments: int = 2_000,
+    ) -> SocialCommentsFetch:
+        """Fetch top-level comments only; reply endpoints are intentionally not called."""
+        normalized = platform.strip().lower()
+        is_instagram = normalized in {"instagram", "insta", "ig"}
+        is_tiktok = normalized in {"tiktok", "tik tok", "tt"}
+        if not (is_instagram or is_tiktok):
+            raise ScrapeCreatorsError(f"Unsupported platform: {platform}")
+
+        path = (
+            "/v2/instagram/post/comments"
+            if is_instagram
+            else "/v1/tiktok/video/comments"
+        )
+        comments: list[SocialComment] = []
+        seen_ids: set[str] = set()
+        seen_cursors: set[str] = set()
+        cursor: str | int | None = None
+        source_total: int | None = None
+        credits_charged = 0
+        truncated = False
+
+        while len(comments) < max(1, max_comments):
+            params: dict[str, Any] = {"url": video_url}
+            if cursor not in (None, ""):
+                params["cursor"] = cursor
+            data = self._get(path, params)
+            credits_charged += _to_int(data.get("credits_charged")) or 0
+            if source_total is None:
+                source_total = _to_int(data.get("total"))
+
+            items = data.get("comments") or []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if not text:
+                    continue
+                published_at = (
+                    str(item.get("created_at") or "") or None
+                    if is_instagram
+                    else _epoch_to_iso(item.get("create_time"))
+                )
+                comment_id = self._comment_id(
+                    platform="Instagram" if is_instagram else "TikTok",
+                    video_url=video_url,
+                    item=item,
+                    text=text,
+                    published_at=published_at,
+                )
+                if comment_id in seen_ids:
+                    continue
+                seen_ids.add(comment_id)
+                comments.append(
+                    SocialComment(
+                        comment_id=comment_id,
+                        text=text,
+                        published_at=published_at,
+                    )
+                )
+                if len(comments) >= max_comments:
+                    truncated = True
+                    break
+
+            next_cursor = data.get("cursor")
+            has_more = (
+                bool(data.get("has_more"))
+                and not bool(data.get("end_of_pagination"))
+                if is_tiktok
+                else bool(next_cursor)
+            )
+            if not has_more or not items or len(comments) >= max_comments:
+                if has_more and len(comments) >= max_comments:
+                    truncated = True
+                break
+            cursor_key = str(next_cursor)
+            if cursor_key in seen_cursors:
+                raise ScrapeCreatorsError(
+                    "Comment pagination cursor repeated; aborted to avoid a loop"
+                )
+            seen_cursors.add(cursor_key)
+            cursor = next_cursor
+
+        return SocialCommentsFetch(
+            platform="Instagram" if is_instagram else "TikTok",
+            comments=comments,
+            source_total=source_total,
+            credits_charged=credits_charged,
+            truncated=truncated,
+        )
 
 
 def calculate_view_deltas(

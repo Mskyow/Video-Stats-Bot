@@ -24,14 +24,17 @@ mock_config.GOOGLE_SHEET_WORKSHEET_NAME = "Marketing Funnels"
 mock_config.TIKTOK_SEARCH_IMPRESSIONS_RATE = 0.008
 mock_config.YOUTUBE_SEARCH_IMPRESSIONS_RATE = 0.005
 mock_config.INSTAGRAM_SEARCH_IMPRESSIONS_RATE = 0.004
+mock_config.CONTENT_PERFORMANCE_TIMEZONE = "Europe/Minsk"
 sys.modules["src.config"] = mock_config
 
 from src.services.sheets_service import (
+    CONTENT_PERFORMANCE_COLUMNS,
     CSV_REQUIRED_COLUMNS,
     MARKETING_FUNNELS_COLUMNS,
     VIDEO_ANALYSIS_COLUMNS,
     _build_row,
     _build_marketing_daily_wide_row,
+    _content_performance_row,
     _calculate_age_hours,
     _get_client,
     _get_credentials,
@@ -43,6 +46,56 @@ from src.services.sheets_service import (
     upsert_marketing_funnel_rows,
     validate_normalized_csv_headers,
 )
+
+
+def test_content_performance_row_has_agreed_columns_and_no_title():
+    row = _content_performance_row(
+        {
+            "platform": "TikTok",
+            "account_name": "@eli_robinsonn",
+            "country": "USA",
+            "video_url": "https://example.test/video",
+            "published_at": "2026-07-28T10:00:00Z",
+            "title": "This must not be exported",
+            "views": 100,
+            "likes": 10,
+            "comments": 2,
+            "shares": 1,
+            "saves": 3,
+            "format_id": 42,
+            "format_name": "Dialogue",
+            "format_source": "https://example.test/source",
+            "format_match_status": "Matched",
+            "app_questions_present": True,
+            "app_questions_count": 2,
+            "comments_analyzed": 10,
+            "ai_comment_summary": "Summary",
+        },
+        2,
+    )
+
+    assert len(row) == len(CONTENT_PERFORMANCE_COLUMNS)
+    assert "Video Title" not in CONTENT_PERFORMANCE_COLUMNS
+    assert row[2] == "USA"
+    assert row[14] == 42
+    assert row[17] == "Matched"
+    assert row[18] == "Summary"
+    assert row[19] == "Yes"
+    assert "This must not be exported" not in row
+
+
+def test_content_performance_posted_at_is_shown_in_minsk_time():
+    row = _content_performance_row(
+        {
+            "platform": "TikTok",
+            "account_name": "@example",
+            "published_at": "2026-07-27T22:30:00+00:00",
+        },
+        2,
+    )
+
+    assert CONTENT_PERFORMANCE_COLUMNS[4] == "Posted At (Minsk)"
+    assert row[4] == "2026-07-28 01:30:00"
 
 
 class TestMarketingDailyWideRows:

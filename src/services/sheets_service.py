@@ -1,7 +1,8 @@
 """
-Google Sheets integration for two independent flows:
+Google Sheets integration for three independent flows:
 - Video Analysis: one row per analyzed video from screenshots
 - Marketing Funnels: one row per Date + Channel + Store, with TOTAL rows
+- Content Performance: one current row per public social video
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import dateparser
 import gspread
@@ -21,6 +23,7 @@ from gspread.exceptions import APIError, WorksheetNotFound
 from oauth2client.service_account import ServiceAccountCredentials
 
 from src.config import (
+    CONTENT_PERFORMANCE_TIMEZONE,
     GOOGLE_CREDENTIALS_JSON,
     GOOGLE_SHEET_CREDENTIALS_PATH,
     GOOGLE_SHEET_ID,
@@ -35,6 +38,8 @@ logger = logging.getLogger(__name__)
 VIDEO_ANALYSIS_WORKSHEET_NAME = "Video Analysis"
 MARKETING_FUNNELS_WORKSHEET_NAME = GOOGLE_SHEET_WORKSHEET_NAME or "Marketing Funnels"
 MARKETING_DAILY_WORKSHEET_NAME = "Marketing Daily"
+CONTENT_PERFORMANCE_WORKSHEET_NAME = "Content Performance"
+ACCOUNT_MAP_WORKSHEET_NAME = "Account Map"
 
 VIDEO_ANALYSIS_COLUMNS = [
     "Recorded At",
@@ -80,6 +85,37 @@ MARKETING_DAILY_COLUMNS = [
     "TT Patricia",
     "TT Maxine",
     "Updated At",
+]
+
+CONTENT_PERFORMANCE_COLUMNS = [
+    "Platform",
+    "Account",
+    "Country",
+    "Video URL",
+    "Posted At (Minsk)",
+    "Views",
+    "Likes",
+    "Comments",
+    "Shares",
+    "Saves",
+    "Like Rate",
+    "Comment Rate",
+    "Share Rate",
+    "Save Rate",
+    "Format ID",
+    "Format Name",
+    "Format Source",
+    "Format Match Status",
+    "AI Comment Summary",
+    "App Questions?",
+    "App Questions Count",
+    "Comments Analyzed",
+]
+
+ACCOUNT_MAP_COLUMNS = [
+    "Platform",
+    "Account",
+    "Country",
 ]
 
 MARKETING_DAILY_INSTAGRAM_COLUMNS = [
@@ -160,6 +196,13 @@ def queue_marketing_daily_export(metric_data: dict[str, Any]) -> None:
         logger.warning("Sheets export queue is full; dropping marketing daily export")
 
 
+def queue_content_performance_export(rows: list[dict[str, Any]]) -> None:
+    try:
+        get_sheets_queue().put_nowait({"kind": "content_performance", "payload": {"rows": rows}})
+    except asyncio.QueueFull:
+        logger.warning("Sheets export queue is full; dropping content performance export")
+
+
 def queue_export(video_data: dict[str, Any]) -> None:
     """Backward-compatible alias."""
     queue_video_analysis_export(video_data)
@@ -179,6 +222,12 @@ async def sheets_worker() -> None:
                 await loop.run_in_executor(None, export_video_to_sheet, payload)
             elif kind == "marketing_daily":
                 await loop.run_in_executor(None, export_marketing_daily_to_sheet, payload)
+            elif kind == "content_performance":
+                await loop.run_in_executor(
+                    None,
+                    export_content_performance_to_sheet,
+                    list(payload.get("rows") or []),
+                )
             else:
                 logger.warning("Unknown sheets worker item kind: %s", kind)
 
@@ -382,6 +431,430 @@ def _apply_video_analysis_layout(worksheet: gspread.Worksheet) -> None:
     _upsert_video_analysis_notes(worksheet)
 
 
+def _content_performance_value(value: Any, *, unavailable: bool = False) -> Any:
+    """Keep unavailable public metrics visibly distinct from a real zero."""
+    if value is None:
+        return "N/A" if unavailable else ""
+    return value
+
+
+def _content_performance_row(item: dict[str, Any], row_number: int) -> list[Any]:
+    views = _content_performance_value(item.get("views"))
+    likes = _content_performance_value(item.get("likes"))
+    comments = _content_performance_value(item.get("comments"))
+    shares = _content_performance_value(item.get("shares"), unavailable=True)
+    saves = _content_performance_value(item.get("saves"), unavailable=True)
+    platform = str(item.get("platform") or "")
+    account = str(item.get("account_name") or "")
+    country = str(item.get("country") or "").strip()
+    if not country and account.strip().removeprefix("@").casefold() == "otty.and.lotty":
+        country = "N/A"
+    published_at = _format_content_posted_at_for_sheet(item.get("published_at"))
+
+    # Rates intentionally remain formulas in the sheet: analysts can audit the
+    # denominator and N/A stays distinct from a real zero for unavailable IG metrics.
+    # This workbook uses a semicolon-locale, so Google Sheets requires ';'
+    # rather than ',' as the argument separator in formulas.
+    like_rate = f'=IFERROR(IF(OR(F{row_number}="";G{row_number}="");"N/A";G{row_number}/F{row_number});"N/A")'
+    comment_rate = f'=IFERROR(IF(OR(F{row_number}="";H{row_number}="");"N/A";H{row_number}/F{row_number});"N/A")'
+    share_rate = f'=IFERROR(IF(OR(F{row_number}="";I{row_number}="N/A");"N/A";I{row_number}/F{row_number});"N/A")'
+    save_rate = f'=IFERROR(IF(OR(F{row_number}="";J{row_number}="N/A");"N/A";J{row_number}/F{row_number});"N/A")'
+    format_id = item.get("format_id")
+    format_source = str(item.get("format_source") or "").strip()
+    if format_source:
+        escaped_source = format_source.replace('"', '""')
+        source_label = (
+            f"{str(item.get('format_name') or '').strip()} · №{format_id}"
+            if format_id is not None
+            else "ТЗ Otty"
+        ).replace('"', '""')
+        format_source_value = f'=HYPERLINK("{escaped_source}";"{source_label}")'
+    else:
+        format_source_value = ""
+    app_questions = item.get("app_questions_present")
+    if app_questions is True:
+        app_questions_value = "Yes"
+    elif app_questions is False:
+        app_questions_value = "No"
+    else:
+        app_questions_value = ""
+
+    return [
+        platform,
+        account,
+        country,
+        str(item.get("video_url") or ""),
+        published_at,
+        views,
+        likes,
+        comments,
+        shares,
+        saves,
+        like_rate,
+        comment_rate,
+        share_rate,
+        save_rate,
+        format_id if format_id is not None else "",
+        str(item.get("format_name") or ""),
+        format_source_value,
+        str(item.get("format_match_status") or ""),
+        str(item.get("ai_comment_summary") or ""),
+        app_questions_value,
+        (
+            item.get("app_questions_count")
+            if item.get("app_questions_count") is not None
+            else ""
+        ),
+        (
+            item.get("comments_analyzed")
+            if item.get("comments_analyzed") is not None
+            else ""
+        ),
+    ]
+
+
+def _grouped_content_performance_rows(
+    rows: list[dict[str, Any]],
+) -> tuple[list[list[Any]], list[tuple[int, int]]]:
+    """Build table rows and non-adjacent native Sheets groups for each post date."""
+    values: list[list[Any]] = []
+    groups: list[tuple[int, int]] = []
+    by_date: list[list[dict[str, Any]]] = []
+    current_date: str | None = None
+    for item in rows:
+        posted = _format_content_posted_at_for_sheet(item.get("published_at"))
+        date_key = posted[:10] if posted else "Unknown date"
+        if current_date != date_key:
+            by_date.append([])
+            current_date = date_key
+        by_date[-1].append(item)
+
+    for group_index, date_rows in enumerate(by_date):
+        start_index = len(values) + 1  # Header occupies zero-based row index 0.
+        for item in date_rows:
+            values.append(_content_performance_row(item, len(values) + 2))
+        end_index = len(values) + 1
+        groups.append((start_index, end_index))
+        # Google merges adjacent dimension groups. A blank divider keeps each
+        # publication date as its own collapsible group without adding a column.
+        if group_index < len(by_date) - 1:
+            values.append([""] * len(CONTENT_PERFORMANCE_COLUMNS))
+    return values, groups
+
+
+def _replace_content_performance_row_groups(
+    spreadsheet: gspread.Spreadsheet,
+    worksheet: gspread.Worksheet,
+    groups: list[tuple[int, int]],
+) -> None:
+    """Rebuild date groups so repeated daily exports remain idempotent."""
+    try:
+        metadata = spreadsheet.fetch_sheet_metadata(
+            params={"fields": "sheets(properties(sheetId),rowGroups(range))"}
+        )
+        sheet_metadata = next(
+            (
+                item
+                for item in metadata.get("sheets", [])
+                if item.get("properties", {}).get("sheetId") == worksheet.id
+            ),
+            {},
+        )
+        requests: list[dict[str, Any]] = []
+        for group in reversed(sheet_metadata.get("rowGroups", [])):
+            group_range = group.get("range")
+            if group_range:
+                requests.append({"deleteDimensionGroup": {"range": group_range}})
+        for start_index, end_index in groups:
+            if end_index - start_index > 1:
+                requests.append(
+                    {
+                        "addDimensionGroup": {
+                            "range": {
+                                "sheetId": worksheet.id,
+                                "dimension": "ROWS",
+                                "startIndex": start_index,
+                                "endIndex": end_index,
+                            }
+                        }
+                    }
+                )
+        if requests:
+            spreadsheet.batch_update({"requests": requests})
+    except Exception:
+        # Grouping is a presentation enhancement; a transient API mismatch must
+        # not block the daily metric table refresh.
+        logger.exception("Failed to rebuild Content Performance row groups")
+
+
+def _apply_content_performance_layout(
+    spreadsheet: gspread.Spreadsheet,
+    worksheet: gspread.Worksheet,
+    row_count: int,
+) -> None:
+    end_col = _column_letter(len(CONTENT_PERFORMANCE_COLUMNS))
+    last_row = max(2, row_count + 1)
+    worksheet.freeze(rows=1, cols=5)
+    worksheet.set_basic_filter(f"A1:{end_col}{last_row}")
+    worksheet.format(
+        f"A1:{end_col}1",
+        {
+            "backgroundColor": {"red": 0.12, "green": 0.31, "blue": 0.47},
+            "horizontalAlignment": "CENTER",
+            "verticalAlignment": "MIDDLE",
+            "textFormat": {
+                "bold": True,
+                "foregroundColor": {"red": 1, "green": 1, "blue": 1},
+            },
+        },
+    )
+    worksheet.format(
+        f"A2:{end_col}{last_row}",
+        {"verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"},
+    )
+    worksheet.format(f"F2:J{last_row}", {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}})
+    worksheet.format(f"K2:N{last_row}", {"numberFormat": {"type": "PERCENT", "pattern": "0.0%"}})
+    worksheet.format(f"E2:E{last_row}", {"numberFormat": {"type": "DATE_TIME", "pattern": "yyyy-mm-dd hh:mm"}})
+    worksheet.format(f"A1:{end_col}{last_row}", {"borders": {"bottom": {"style": "SOLID", "color": {"red": 0.85, "green": 0.88, "blue": 0.92}}}})
+
+    widths = [
+        90, 150, 125, 260, 145,
+        90, 90, 95, 90, 90,
+        100, 115, 105, 100,
+        85, 240, 170, 210,
+        115, 135, 125, 360,
+    ]
+    column_width_requests = []
+    for column_index, width in enumerate(widths):
+        column_width_requests.append(
+            {
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": worksheet.id,
+                        "dimension": "COLUMNS",
+                        "startIndex": column_index,
+                        "endIndex": column_index + 1,
+                    },
+                    "properties": {"pixelSize": width},
+                    "fields": "pixelSize",
+                }
+            }
+        )
+    metadata = spreadsheet.fetch_sheet_metadata(
+        params={"fields": "sheets(properties(sheetId),conditionalFormats)"}
+    )
+    sheet_metadata = next(
+        (
+            item
+            for item in metadata.get("sheets", [])
+            if item.get("properties", {}).get("sheetId") == worksheet.id
+        ),
+        {},
+    )
+    conditional_requests: list[dict[str, Any]] = []
+    for index in reversed(range(len(sheet_metadata.get("conditionalFormats", [])))):
+        conditional_requests.append(
+            {
+                "deleteConditionalFormatRule": {
+                    "sheetId": worksheet.id,
+                    "index": index,
+                }
+            }
+        )
+
+    def _range(start_column: int, end_column: int) -> dict[str, int]:
+        return {
+            "sheetId": worksheet.id,
+            "startRowIndex": 1,
+            "endRowIndex": last_row,
+            "startColumnIndex": start_column,
+            "endColumnIndex": end_column,
+        }
+
+    conditional_specs = [
+        (
+            _range(17, 18),
+            "TEXT_EQ",
+            "Matched",
+            {"red": 0.85, "green": 0.94, "blue": 0.85},
+        ),
+        (
+            _range(17, 18),
+            "TEXT_STARTS_WITH",
+            "Requires review",
+            {"red": 0.98, "green": 0.80, "blue": 0.80},
+        ),
+        (
+            _range(17, 18),
+            "TEXT_EQ",
+            "No format scheduled",
+            {"red": 0.98, "green": 0.91, "blue": 0.70},
+        ),
+        (
+            _range(17, 18),
+            "TEXT_EQ",
+            "Excluded account",
+            {"red": 0.88, "green": 0.88, "blue": 0.88},
+        ),
+        (
+            _range(19, 20),
+            "TEXT_EQ",
+            "Yes",
+            {"red": 1.0, "green": 0.85, "blue": 0.55},
+        ),
+        (
+            _range(8, 14),
+            "TEXT_EQ",
+            "N/A",
+            {"red": 0.91, "green": 0.91, "blue": 0.91},
+        ),
+    ]
+    for rule_range, condition_type, value, color in conditional_specs:
+        conditional_requests.append(
+            {
+                "addConditionalFormatRule": {
+                    "index": 0,
+                    "rule": {
+                        "ranges": [rule_range],
+                        "booleanRule": {
+                            "condition": {
+                                "type": condition_type,
+                                "values": [{"userEnteredValue": value}],
+                            },
+                            "format": {"backgroundColor": color},
+                        },
+                    },
+                }
+            }
+        )
+    spreadsheet.batch_update(
+        {"requests": column_width_requests + conditional_requests}
+    )
+
+
+def export_content_performance_to_sheet(rows: list[dict[str, Any]]) -> bool:
+    """Replace the dedicated one-row-per-video Google Sheets presentation."""
+    if (not GOOGLE_SHEET_CREDENTIALS_PATH and not GOOGLE_CREDENTIALS_JSON) or not GOOGLE_SHEET_ID:
+        logger.warning("Google Sheets not configured; skip Content Performance export")
+        return False
+
+    try:
+        sorted_rows = sorted(
+            rows,
+            key=lambda item: str(item.get("published_at") or ""),
+            reverse=True,
+        )
+        client = _get_client()
+        spreadsheet = _open_spreadsheet(client)
+        worksheet = _get_or_create_worksheet(
+            spreadsheet,
+            CONTENT_PERFORMANCE_WORKSHEET_NAME,
+            CONTENT_PERFORMANCE_COLUMNS,
+        )
+        end_col = _column_letter(len(CONTENT_PERFORMANCE_COLUMNS))
+        worksheet.batch_clear([f"A2:{end_col}{max(worksheet.row_count, 2)}"])
+        values, groups = _grouped_content_performance_rows(sorted_rows)
+        if values:
+            worksheet.update(
+                range_name=f"A2:{end_col}{len(values) + 1}",
+                values=values,
+                value_input_option="USER_ENTERED",
+            )
+        _apply_content_performance_layout(spreadsheet, worksheet, len(values))
+        _replace_content_performance_row_groups(
+            spreadsheet,
+            worksheet,
+            groups,
+        )
+        logger.info("Exported %s Content Performance rows to Google Sheets", len(values))
+        return True
+    except FileNotFoundError as exc:
+        logger.warning("Content Performance export skipped: %s", exc)
+        return False
+    except Exception:
+        logger.exception("Unexpected error during Content Performance export")
+        return False
+
+
+def export_account_map_to_sheet(rows: list[dict[str, Any]]) -> bool:
+    """Publish the database-backed account/country reference used by format matching."""
+    if (not GOOGLE_SHEET_CREDENTIALS_PATH and not GOOGLE_CREDENTIALS_JSON) or not GOOGLE_SHEET_ID:
+        logger.warning("Google Sheets not configured; skip Account Map export")
+        return False
+
+    try:
+        values = [
+            [
+                str(item.get("platform") or ""),
+                str(item.get("handle") or "").strip().removeprefix("@"),
+                str(item.get("country") or ""),
+            ]
+            for item in sorted(
+                rows,
+                key=lambda item: (
+                    str(item.get("platform") or ""),
+                    str(item.get("handle") or ""),
+                ),
+            )
+            if str(item.get("handle") or "").strip().removeprefix("@").casefold()
+            != "otty.and.lotty"
+        ]
+        spreadsheet = _open_spreadsheet(_get_client())
+        worksheet = _get_or_create_worksheet(
+            spreadsheet,
+            ACCOUNT_MAP_WORKSHEET_NAME,
+            ACCOUNT_MAP_COLUMNS,
+        )
+        worksheet.batch_clear([f"A2:C{max(worksheet.row_count, 2)}"])
+        if values:
+            worksheet.update(
+                range_name=f"A2:C{len(values) + 1}",
+                values=values,
+                value_input_option="USER_ENTERED",
+            )
+        worksheet.freeze(rows=1)
+        worksheet.set_basic_filter(f"A1:C{max(2, len(values) + 1)}")
+        worksheet.format(
+            "A1:C1",
+            {
+                "backgroundColor": {"red": 0.12, "green": 0.31, "blue": 0.47},
+                "horizontalAlignment": "CENTER",
+                "textFormat": {
+                    "bold": True,
+                    "foregroundColor": {"red": 1, "green": 1, "blue": 1},
+                },
+            },
+        )
+        worksheet.format(
+            f"A2:C{max(2, len(values) + 1)}",
+            {"verticalAlignment": "MIDDLE"},
+        )
+        spreadsheet.batch_update(
+            {
+                "requests": [
+                    {
+                        "updateDimensionProperties": {
+                            "range": {
+                                "sheetId": worksheet.id,
+                                "dimension": "COLUMNS",
+                                "startIndex": index,
+                                "endIndex": index + 1,
+                            },
+                            "properties": {"pixelSize": width},
+                            "fields": "pixelSize",
+                        }
+                    }
+                    for index, width in enumerate((110, 190, 150))
+                ]
+            }
+        )
+        logger.info("Exported %s Account Map rows to Google Sheets", len(values))
+        return True
+    except Exception:
+        logger.exception("Unexpected error during Account Map export")
+        return False
+
+
 def _normalize_platform(value: Any) -> str:
     text = str(value or "").strip().lower()
     if "tiktok" in text:
@@ -442,6 +915,14 @@ def _format_posted_at_for_sheet(value: Any) -> str:
     if _source_mentions_year(value):
         return f"{month} {day}, {parsed.year}"
     return f"{month} {day}"
+
+
+def _format_content_posted_at_for_sheet(value: Any) -> str:
+    parsed = _parse_datetime(value)
+    if not parsed:
+        return str(value or "").strip()
+    localized = parsed.astimezone(ZoneInfo(CONTENT_PERFORMANCE_TIMEZONE))
+    return localized.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _normalize_date_key(value: Any) -> str | None:

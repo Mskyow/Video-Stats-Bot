@@ -14,6 +14,7 @@ from src.db.repositories.marketing import (
     create_social_scrape_run,
     finish_social_scrape_run,
     get_previous_account_snapshot,
+    get_recent_account_snapshot_baseline,
     list_enabled_social_scrape_accounts,
     upsert_channel_daily_metric,
     upsert_social_video_snapshots,
@@ -22,6 +23,10 @@ from src.services.scrapecreators_service import ScrapeCreatorsClient, SocialVide
 
 
 logger = logging.getLogger(__name__)
+
+
+class IncompleteSocialSnapshotError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -98,6 +103,28 @@ def calculate_account_daily_views(
     return total, matched, new_videos
 
 
+def _validate_snapshot_completeness(
+    *,
+    platform: str,
+    handle: str,
+    current_count: int,
+    previous_count: int,
+) -> None:
+    if previous_count < config.SOCIAL_SCRAPE_MIN_BASELINE_VIDEOS:
+        return
+    minimum_expected = max(
+        1,
+        int(previous_count * config.SOCIAL_SCRAPE_MIN_SNAPSHOT_RATIO),
+    )
+    if current_count >= minimum_expected:
+        return
+    raise IncompleteSocialSnapshotError(
+        f"Incomplete snapshot for {platform} @{handle}: "
+        f"received {current_count} videos, previous snapshot had {previous_count}, "
+        f"minimum expected is {minimum_expected}"
+    )
+
+
 def collect_social_account(
     supabase: Client,
     account: dict[str, Any],
@@ -111,6 +138,9 @@ def collect_social_account(
     run = create_social_scrape_run(supabase, account_id=str(account["id"]))
     run_id = str(run["id"])
     api_client = client or ScrapeCreatorsClient()
+    pages_requested = 0
+    videos_received = 0
+    videos_in_scope = 0
 
     try:
         fetched = api_client.fetch_account_since(
@@ -120,6 +150,9 @@ def collect_social_account(
             start_published_at=account.get("start_published_at"),
             max_pages=config.SOCIAL_SCRAPE_MAX_PAGES,
         )
+        pages_requested = len(fetched.raw_pages)
+        videos_received = fetched.videos_received
+        videos_in_scope = len(fetched.videos)
         if fetched.max_pages_reached:
             raise RuntimeError(
                 f"Reached SOCIAL_SCRAPE_MAX_PAGES={config.SOCIAL_SCRAPE_MAX_PAGES} "
@@ -144,6 +177,19 @@ def collect_social_account(
             platform=fetched.platform,
             account_name=fetched.account_name,
             before_date=snapshot_date,
+        )
+        recent_baseline = get_recent_account_snapshot_baseline(
+            supabase,
+            platform=fetched.platform,
+            account_name=fetched.account_name,
+            before_date=snapshot_date,
+            lookback_days=config.SOCIAL_SCRAPE_BASELINE_LOOKBACK_DAYS,
+        )
+        _validate_snapshot_completeness(
+            platform=platform,
+            handle=handle,
+            current_count=videos_in_scope,
+            previous_count=max(len(previous_by_video), recent_baseline),
         )
         saved = upsert_social_video_snapshots(
             supabase,
@@ -192,9 +238,9 @@ def collect_social_account(
             supabase,
             run_id=run_id,
             status="success",
-            pages_requested=len(fetched.raw_pages),
-            videos_received=fetched.videos_received,
-            videos_in_scope=len(fetched.videos),
+            pages_requested=pages_requested,
+            videos_received=videos_received,
+            videos_in_scope=videos_in_scope,
             total_lifetime_views=total_views,
             start_video_found=fetched.start_video_found,
             raw_pages=fetched.raw_pages,
@@ -218,9 +264,9 @@ def collect_social_account(
                 supabase,
                 run_id=run_id,
                 status="failed",
-                pages_requested=0,
-                videos_received=0,
-                videos_in_scope=0,
+                pages_requested=pages_requested,
+                videos_received=videos_received,
+                videos_in_scope=videos_in_scope,
                 total_lifetime_views=None,
                 start_video_found=None,
                 error=error,
@@ -235,15 +281,15 @@ def collect_configured_social_accounts(
     *,
     calculate_daily: bool = True,
 ) -> list[SocialScrapeResult]:
+    accounts = list_enabled_social_scrape_accounts(supabase)
     results: list[SocialScrapeResult] = []
-    for account in list_enabled_social_scrape_accounts(supabase):
+
+    def collect_one(account: dict[str, Any]) -> SocialScrapeResult:
         try:
-            results.append(
-                collect_social_account(
-                    supabase,
-                    account,
-                    calculate_daily=calculate_daily,
-                )
+            return collect_social_account(
+                supabase,
+                account,
+                calculate_daily=calculate_daily,
             )
         except Exception as exc:
             logger.exception(
@@ -251,18 +297,44 @@ def collect_configured_social_accounts(
                 account.get("platform"),
                 account.get("handle"),
             )
-            results.append(
-                SocialScrapeResult(
-                    platform=str(account.get("platform") or "Unknown"),
-                    handle=str(account.get("handle") or "unknown"),
-                    display_name=str(account.get("display_name") or account.get("handle") or "unknown"),
-                    status="failed",
-                    pages_requested=0,
-                    videos_received=0,
-                    videos_saved=0,
-                    total_lifetime_views=0,
-                    start_video_found=None,
-                    error=str(exc)[:500],
-                )
+            return SocialScrapeResult(
+                platform=str(account.get("platform") or "Unknown"),
+                handle=str(account.get("handle") or "unknown"),
+                display_name=str(account.get("display_name") or account.get("handle") or "unknown"),
+                status="failed",
+                pages_requested=0,
+                videos_received=0,
+                videos_saved=0,
+                total_lifetime_views=0,
+                start_video_found=None,
+                error=str(exc)[:500],
             )
+
+    for account in accounts:
+        results.append(collect_one(account))
+
+    if config.SOCIAL_SCRAPE_RETRY_FAILED_ACCOUNTS:
+        failed_indexes = [
+            index for index, result in enumerate(results) if result.status == "failed"
+        ]
+        if failed_indexes:
+            logger.warning(
+                "Retrying failed social accounts after primary pass: %s",
+                [
+                    f"{results[index].platform} @{results[index].handle}"
+                    for index in failed_indexes
+                ],
+            )
+        for index in failed_indexes:
+            results[index] = collect_one(accounts[index])
+
+    remaining_failures = [result for result in results if result.status == "failed"]
+    if remaining_failures:
+        logger.error(
+            "Social scrape completed with failed accounts: %s",
+            [
+                f"{result.platform} @{result.handle}: {result.error}"
+                for result in remaining_failures
+            ],
+        )
     return results

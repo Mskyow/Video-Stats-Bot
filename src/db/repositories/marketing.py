@@ -7,7 +7,7 @@ while creative analytics can still live in the per-video screenshot flow.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from supabase import Client
@@ -299,6 +299,37 @@ def get_previous_account_snapshot(
     scraped_values = [str(row["scraped_at"]) for row in rows if row.get("scraped_at")]
     previous_scraped_at = max(scraped_values) if scraped_values else None
     return snapshot_date, previous_scraped_at, by_video
+
+
+def get_recent_account_snapshot_baseline(
+    supabase: Client,
+    *,
+    platform: str,
+    account_name: str,
+    before_date: str,
+    lookback_days: int = 7,
+    provider: str = "scrapecreators",
+) -> int:
+    oldest_date = (
+        date.fromisoformat(before_date) - timedelta(days=max(1, lookback_days))
+    ).isoformat()
+    response = (
+        supabase.table("social_video_snapshots")
+        .select("snapshot_date,video_id")
+        .eq("platform", platform)
+        .eq("account_name", account_name)
+        .eq("provider", provider)
+        .gte("snapshot_date", oldest_date)
+        .lt("snapshot_date", before_date)
+        .limit(1000)
+        .execute()
+    )
+    counts: dict[str, int] = {}
+    for row in response.data or []:
+        snapshot_date = str(row.get("snapshot_date") or "")
+        if snapshot_date and row.get("video_id"):
+            counts[snapshot_date] = counts.get(snapshot_date, 0) + 1
+    return max(counts.values(), default=0)
 
 
 def list_latest_previous_video_snapshots(

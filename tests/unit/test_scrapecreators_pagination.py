@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from src.services.scrapecreators_service import ScrapeCreatorsClient
+import pytest
+import requests
+
+from src.services import scrapecreators_service
+from src.services.scrapecreators_service import ScrapeCreatorsClient, ScrapeCreatorsError
 
 
 class FakeClient(ScrapeCreatorsClient):
@@ -123,3 +127,120 @@ def test_date_cutoff_is_fallback_when_start_video_is_missing():
     assert [item.video_id for item in result.videos] == ["new"]
     assert result.start_video_found is False
     assert len(client.calls) == 1
+
+
+def test_tiktok_comments_paginate_and_ignore_reply_payloads():
+    client = FakeClient(
+        [
+            {
+                "comments": [
+                    {
+                        "cid": "c1",
+                        "text": "App name?",
+                        "create_time": 100,
+                        "reply_comment": [{"cid": "reply", "text": "Otty"}],
+                    }
+                ],
+                "total": 3,
+                "has_more": 1,
+                "cursor": 20,
+            },
+            {
+                "comments": [
+                    {"cid": "c2", "text": "Nice", "create_time": 110},
+                ],
+                "total": 3,
+                "has_more": 0,
+                "cursor": 40,
+            },
+        ]
+    )
+
+    result = client.fetch_video_comments(
+        "TikTok",
+        "https://www.tiktok.com/@example/video/1",
+    )
+
+    assert [item.comment_id for item in result.comments] == ["c1", "c2"]
+    assert all("reply" not in item.comment_id for item in result.comments)
+    assert client.calls[1][1]["cursor"] == 20
+
+
+def test_instagram_comments_stop_at_requested_cap():
+    client = FakeClient(
+        [
+            {
+                "comments": [
+                    {"id": "c1", "text": "One", "created_at": "2026-07-28T10:00:00Z"},
+                    {"id": "c2", "text": "Two", "created_at": "2026-07-28T11:00:00Z"},
+                ],
+                "cursor": "next",
+                "credits_charged": 1,
+            }
+        ]
+    )
+
+    result = client.fetch_video_comments(
+        "Instagram",
+        "https://www.instagram.com/p/example/",
+        max_comments=1,
+    )
+
+    assert [item.comment_id for item in result.comments] == ["c1"]
+    assert result.truncated is True
+    assert result.credits_charged == 1
+
+
+class FakeResponse:
+    def __init__(self, status_code, payload, headers=None):
+        self.status_code = status_code
+        self.payload = payload
+        self.headers = headers or {}
+
+    def json(self):
+        return self.payload
+
+
+def test_get_retries_transient_server_errors(monkeypatch):
+    responses = [
+        FakeResponse(500, {"message": "temporary"}),
+        FakeResponse(503, {"message": "still temporary"}),
+        FakeResponse(200, {"aweme_list": []}),
+    ]
+    sleeps = []
+
+    monkeypatch.setattr(scrapecreators_service, "SCRAPECREATORS_MAX_RETRIES", 3)
+    monkeypatch.setattr(scrapecreators_service, "SCRAPECREATORS_RETRY_BACKOFF_SEC", 1.0)
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: responses.pop(0))
+    monkeypatch.setattr(scrapecreators_service.time, "sleep", sleeps.append)
+
+    result = ScrapeCreatorsClient("test")._get(
+        "/v3/tiktok/profile/videos",
+        {"handle": "example"},
+    )
+
+    assert result == {"aweme_list": []}
+    assert sleeps == [1.0, 2.0]
+
+
+def test_get_does_not_retry_non_transient_client_error(monkeypatch):
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        return FakeResponse(401, {"message": "unauthorized"})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(
+        scrapecreators_service.time,
+        "sleep",
+        lambda *_: pytest.fail("non-transient errors must not be retried"),
+    )
+
+    with pytest.raises(ScrapeCreatorsError, match="HTTP 401"):
+        ScrapeCreatorsClient("test")._get(
+            "/v3/tiktok/profile/videos",
+            {"handle": "example"},
+        )
+
+    assert len(calls) == 1

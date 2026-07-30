@@ -21,3 +21,4 @@ build
 *.log
 Untitled
 supabase/.temp/
+.railway/
