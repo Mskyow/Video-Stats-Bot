@@ -185,6 +185,22 @@ def collect_social_account(
             before_date=snapshot_date,
             lookback_days=config.SOCIAL_SCRAPE_BASELINE_LOOKBACK_DAYS,
         )
+        minimum_previous_count = max(
+            1,
+            int(recent_baseline * config.SOCIAL_SCRAPE_MIN_SNAPSHOT_RATIO),
+        )
+        previous_snapshot_incomplete = (
+            recent_baseline >= config.SOCIAL_SCRAPE_MIN_BASELINE_VIDEOS
+            and len(previous_by_video) < minimum_previous_count
+        )
+        if previous_snapshot_incomplete:
+            logger.warning(
+                "Previous snapshot is incomplete for %s @%s: previous=%s baseline=%s",
+                platform,
+                handle,
+                len(previous_by_video),
+                recent_baseline,
+            )
         _validate_snapshot_completeness(
             platform=platform,
             handle=handle,
@@ -225,6 +241,13 @@ def collect_social_account(
                 raw_text=(
                     f"interval={previous_date}->{snapshot_date}; "
                     f"matched_videos={matched}; new_videos={new_videos}"
+                    + (
+                        f"; quality=partial_previous_snapshot; "
+                        f"previous_videos={len(previous_by_video)}; "
+                        f"recent_baseline={recent_baseline}"
+                        if previous_snapshot_incomplete
+                        else ""
+                    )
                 ),
             )
         elif calculate_daily and skip_reason:
