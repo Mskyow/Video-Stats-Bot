@@ -5,7 +5,7 @@ import re
 import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -17,6 +17,7 @@ from src.services.sheets_service import _get_client
 
 
 EXCLUDED_FORMAT_ACCOUNTS = {"otty.and.lotty"}
+MANUAL_OVERRIDE_STATUS_PREFIX = "Requires review: manual override"
 
 COUNTRY_ALIASES = {
     "сша": "USA",
@@ -164,7 +165,17 @@ def _clean_account(value: Any) -> str:
     return str(value or "").strip().removeprefix("@").casefold()
 
 
+def _is_manual_override(value: Any) -> bool:
+    return str(value or "").startswith(MANUAL_OVERRIDE_STATUS_PREFIX)
+
+
 def _local_post_date(value: Any) -> str | None:
+    """Return the planned-content date for a publication timestamp.
+
+    A video published from midnight through 04:00 Minsk time is treated as
+    part of the preceding publishing day. This keeps late-night posts matched
+    to the format that was planned for the prior day.
+    """
     text = str(value or "").strip()
     if not text:
         return None
@@ -174,9 +185,10 @@ def _local_post_date(value: Any) -> str | None:
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(
-        ZoneInfo(config.CONTENT_PERFORMANCE_TIMEZONE)
-    ).date().isoformat()
+    localized = parsed.astimezone(ZoneInfo(config.CONTENT_PERFORMANCE_TIMEZONE))
+    if localized.hour < 4 or (localized.hour == 4 and localized.minute == 0 and localized.second == 0):
+        return (localized - timedelta(days=1)).date().isoformat()
+    return localized.date().isoformat()
 
 
 def build_format_assignments(
@@ -302,6 +314,29 @@ def sync_content_format_assignments(
         supabase,
         lookback_days=lookback_days,
     )
+    manual_rows = (
+        supabase.table("social_video_format_assignments")
+        .select("platform,account_name,video_id,format_match_status")
+        .like("format_match_status", f"{MANUAL_OVERRIDE_STATUS_PREFIX}%")
+        .execute()
+        .data
+        or []
+    )
+    manual_keys = {
+        (str(item["platform"]), str(item["account_name"]), str(item["video_id"]))
+        for item in manual_rows
+        if _is_manual_override(item.get("format_match_status"))
+    }
+    performance_rows = [
+        row
+        for row in performance_rows
+        if (
+            str(row.get("platform") or ""),
+            str(row.get("account_name") or ""),
+            str(row.get("video_id") or ""),
+        )
+        not in manual_keys
+    ]
     schedule = load_otty_format_schedule()
     assignments = build_format_assignments(performance_rows, schedule)
     if assignments:

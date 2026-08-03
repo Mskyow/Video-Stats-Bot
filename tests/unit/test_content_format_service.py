@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from src.services.content_format_service import (
+    MANUAL_OVERRIDE_STATUS_PREFIX,
     FormatScheduleItem,
+    _is_manual_override,
     _parse_publish_scope,
+    _posting_dates,
     build_format_assignments,
 )
 
@@ -71,6 +74,18 @@ def test_otty_account_is_explicitly_excluded():
     assert assignments[0]["format_match_status"] == "Excluded account"
 
 
+def test_manual_override_status_is_recognized():
+    assert _is_manual_override(f"{MANUAL_OVERRIDE_STATUS_PREFIX}: format 76")
+    assert not _is_manual_override("Requires review: count mismatch")
+
+
+def test_multiple_posting_dates_create_a_separate_occurrence_per_day():
+    assert _posting_dates("1.08, 2.08", year=2026) == [
+        "2026-08-01",
+        "2026-08-02",
+    ]
+
+
 def test_publish_scope_requires_exact_platform_and_country():
     pairs, valid = _parse_publish_scope(
         "TikTok: США, Франция; Instagram: Великобритания"
@@ -86,16 +101,16 @@ def test_publish_scope_requires_exact_platform_and_country():
     )
 
 
-def test_post_after_midnight_minsk_matches_next_local_day(monkeypatch):
+def test_post_before_4am_minsk_matches_previous_planned_day(monkeypatch):
     monkeypatch.setattr(
         "src.services.content_format_service.config.CONTENT_PERFORMANCE_TIMEZONE",
         "Europe/Minsk",
     )
     row = _video("late-utc", "2026-07-27T22:30:00+00:00")
-    next_day_format = FormatScheduleItem(
+    previous_day_format = FormatScheduleItem(
         format_id=42,
         format_name="Format 42",
-        posting_date="2026-07-28",
+        posting_date="2026-07-27",
         occurrence_index=1,
         source_row=42,
         source_url="https://example.test/42",
@@ -104,7 +119,31 @@ def test_post_after_midnight_minsk_matches_next_local_day(monkeypatch):
         scope_valid=True,
     )
 
-    assignments = build_format_assignments([row], [next_day_format])
+    assignments = build_format_assignments([row], [previous_day_format])
 
-    assert assignments[0]["source_post_date"] == "2026-07-28"
+    assert assignments[0]["source_post_date"] == "2026-07-27"
+    assert assignments[0]["format_match_status"] == "Matched"
+
+
+def test_post_at_4am_minsk_matches_previous_planned_day(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.content_format_service.config.CONTENT_PERFORMANCE_TIMEZONE",
+        "Europe/Minsk",
+    )
+    row = _video("four-am", "2026-07-28T01:00:00+00:00")
+    previous_day_format = FormatScheduleItem(
+        format_id=42,
+        format_name="Format 42",
+        posting_date="2026-07-27",
+        occurrence_index=1,
+        source_row=42,
+        source_url="https://example.test/42",
+        raw_publish_scope="",
+        allowed_pairs=None,
+        scope_valid=True,
+    )
+
+    assignments = build_format_assignments([row], [previous_day_format])
+
+    assert assignments[0]["source_post_date"] == "2026-07-27"
     assert assignments[0]["format_match_status"] == "Matched"
