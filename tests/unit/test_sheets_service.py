@@ -81,6 +81,7 @@ def test_content_performance_row_has_agreed_columns_and_no_title():
     assert row[17] == "Matched"
     assert row[18] == "Summary"
     assert row[19] == "Yes"
+    assert row[22] == '=IFERROR(IF(OR(F2="";U2="");"";U2/F2);"")'
     assert "This must not be exported" not in row
 
 

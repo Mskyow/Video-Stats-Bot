@@ -110,6 +110,7 @@ CONTENT_PERFORMANCE_COLUMNS = [
     "App Questions?",
     "App Questions Count",
     "Comments Analyzed",
+    "Comment App Rate",
 ]
 
 ACCOUNT_MAP_COLUMNS = [
@@ -459,6 +460,10 @@ def _content_performance_row(item: dict[str, Any], row_number: int) -> list[Any]
     comment_rate = f'=IFERROR(IF(OR(F{row_number}="";H{row_number}="");"N/A";H{row_number}/F{row_number});"N/A")'
     share_rate = f'=IFERROR(IF(OR(F{row_number}="";I{row_number}="N/A");"N/A";I{row_number}/F{row_number});"N/A")'
     save_rate = f'=IFERROR(IF(OR(F{row_number}="";J{row_number}="N/A");"N/A";J{row_number}/F{row_number});"N/A")'
+    comment_app_rate = (
+        f'=IFERROR(IF(OR(F{row_number}="";U{row_number}="");"";'
+        f'U{row_number}/F{row_number});"")'
+    )
     format_id = item.get("format_id")
     format_source = str(item.get("format_source") or "").strip()
     if format_source:
@@ -510,6 +515,7 @@ def _content_performance_row(item: dict[str, Any], row_number: int) -> list[Any]
             if item.get("comments_analyzed") is not None
             else ""
         ),
+        comment_app_rate,
     ]
 
 
@@ -614,6 +620,7 @@ def _apply_content_performance_layout(
     )
     worksheet.format(f"F2:J{last_row}", {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}})
     worksheet.format(f"K2:N{last_row}", {"numberFormat": {"type": "PERCENT", "pattern": "0.0%"}})
+    worksheet.format(f"W2:W{last_row}", {"numberFormat": {"type": "PERCENT", "pattern": "0.000%"}})
     worksheet.format(f"E2:E{last_row}", {"numberFormat": {"type": "DATE_TIME", "pattern": "yyyy-mm-dd hh:mm"}})
     worksheet.format(f"A1:{end_col}{last_row}", {"borders": {"bottom": {"style": "SOLID", "color": {"red": 0.85, "green": 0.88, "blue": 0.92}}}})
 
@@ -623,6 +630,7 @@ def _apply_content_performance_layout(
         100, 115, 105, 100,
         85, 240, 170, 210,
         115, 135, 125, 360,
+        115,
     ]
     column_width_requests = []
     for column_index, width in enumerate(widths):
