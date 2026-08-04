@@ -5,7 +5,7 @@ import re
 import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -172,7 +172,7 @@ def _is_manual_override(value: Any) -> bool:
 def _local_post_date(value: Any) -> str | None:
     """Return the planned-content date for a publication timestamp.
 
-    A video published from midnight through 04:00 Minsk time is treated as
+    A video published from midnight through 08:00 Minsk time is treated as
     part of the preceding publishing day. This keeps late-night posts matched
     to the format that was planned for the prior day.
     """
@@ -186,7 +186,7 @@ def _local_post_date(value: Any) -> str | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     localized = parsed.astimezone(ZoneInfo(config.CONTENT_PERFORMANCE_TIMEZONE))
-    if localized.hour < 4 or (localized.hour == 4 and localized.minute == 0 and localized.second == 0):
+    if localized.time() <= time(8):
         return (localized - timedelta(days=1)).date().isoformat()
     return localized.date().isoformat()
 

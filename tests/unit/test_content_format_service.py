@@ -101,12 +101,12 @@ def test_publish_scope_requires_exact_platform_and_country():
     )
 
 
-def test_post_before_4am_minsk_matches_previous_planned_day(monkeypatch):
+def test_post_before_8am_minsk_matches_previous_planned_day(monkeypatch):
     monkeypatch.setattr(
         "src.services.content_format_service.config.CONTENT_PERFORMANCE_TIMEZONE",
         "Europe/Minsk",
     )
-    row = _video("late-utc", "2026-07-27T22:30:00+00:00")
+    row = _video("late-utc", "2026-07-28T04:59:00+00:00")
     previous_day_format = FormatScheduleItem(
         format_id=42,
         format_name="Format 42",
@@ -125,12 +125,12 @@ def test_post_before_4am_minsk_matches_previous_planned_day(monkeypatch):
     assert assignments[0]["format_match_status"] == "Matched"
 
 
-def test_post_at_4am_minsk_matches_previous_planned_day(monkeypatch):
+def test_post_at_8am_minsk_matches_previous_planned_day(monkeypatch):
     monkeypatch.setattr(
         "src.services.content_format_service.config.CONTENT_PERFORMANCE_TIMEZONE",
         "Europe/Minsk",
     )
-    row = _video("four-am", "2026-07-28T01:00:00+00:00")
+    row = _video("eight-am", "2026-07-28T05:00:00+00:00")
     previous_day_format = FormatScheduleItem(
         format_id=42,
         format_name="Format 42",
