@@ -14,7 +14,7 @@ import logging
 import re
 import statistics
 import time
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from typing import Any
 
 import requests
@@ -27,8 +27,11 @@ logger = logging.getLogger(__name__)
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "google/gemini-3-flash-preview"  # fallback if config not loaded
 
-# In-memory cache: key -> (rendered_summary_html, timestamp)
-_cache: dict[str, tuple[str, float]] = {}
+# In-memory caches must have a size ceiling because the bot is a long-lived
+# process. Their values can always be recomputed from Supabase/OpenRouter.
+DAY_SUMMARY_CACHE_MAX_ENTRIES = 128
+HOOK_TRANSLATION_CACHE_MAX_ENTRIES = 512
+_cache: OrderedDict[str, tuple[str, float]] = OrderedDict()
 
 _HOOK_STOPWORDS = {
     "и",
@@ -129,7 +132,7 @@ _HOOK_TRANSLATION_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_HOOK_TRANSLATION_CACHE: dict[str, str] = {}
+_HOOK_TRANSLATION_CACHE: OrderedDict[str, str] = OrderedDict()
 _CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 _LATIN_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ]")
 
@@ -271,6 +274,9 @@ def _translate_hook_texts(hook_texts: list[str]) -> dict[str, str]:
         for source, translation in translated.items():
             if source and translation:
                 _HOOK_TRANSLATION_CACHE[source] = translation
+                _HOOK_TRANSLATION_CACHE.move_to_end(source)
+                while len(_HOOK_TRANSLATION_CACHE) > HOOK_TRANSLATION_CACHE_MAX_ENTRIES:
+                    _HOOK_TRANSLATION_CACHE.popitem(last=False)
 
     return {
         source: _HOOK_TRANSLATION_CACHE[source]
@@ -1522,6 +1528,7 @@ async def generate_day_summary(
     cache_key = _build_cache_key(compact_rows, model_name, max_tokens, temperature)
     cached = _cache.get(cache_key)
     if cached and (time.time() - cached[1] < cache_ttl_sec):
+        _cache.move_to_end(cache_key)
         logger.debug("Returning cached day summary")
         return cached[0]
 
@@ -1549,5 +1556,8 @@ async def generate_day_summary(
         summary = _fallback_summary(evidence)
 
     _cache[cache_key] = (summary, time.time())
+    _cache.move_to_end(cache_key)
     _cleanup_cache(cache_ttl_sec)
+    while len(_cache) > DAY_SUMMARY_CACHE_MAX_ENTRIES:
+        _cache.popitem(last=False)
     return summary

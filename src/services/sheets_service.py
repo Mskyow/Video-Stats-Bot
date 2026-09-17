@@ -172,6 +172,10 @@ STORES = ("App Store", "Google Play")
 
 MAX_RETRIES = 3
 RETRY_DELAY_BASE = 2
+# Google Sheets is a mirror of data already saved in Supabase. Keeping this
+# small prevents a slow/unavailable Sheets API from retaining an unbounded
+# number of AI results in the bot process.
+SHEETS_QUEUE_MAXSIZE = 32
 
 _sheets_queue: asyncio.Queue[dict[str, Any]] | None = None
 
@@ -179,7 +183,7 @@ _sheets_queue: asyncio.Queue[dict[str, Any]] | None = None
 def get_sheets_queue() -> asyncio.Queue[dict[str, Any]]:
     global _sheets_queue
     if _sheets_queue is None:
-        _sheets_queue = asyncio.Queue()
+        _sheets_queue = asyncio.Queue(maxsize=SHEETS_QUEUE_MAXSIZE)
     return _sheets_queue
 
 
@@ -213,6 +217,7 @@ async def sheets_worker() -> None:
     logger.info("Sheets worker started")
     queue = get_sheets_queue()
     while True:
+        item: dict[str, Any] | None = None
         try:
             item = await queue.get()
             kind = item.get("kind")
@@ -227,18 +232,20 @@ async def sheets_worker() -> None:
                 await loop.run_in_executor(
                     None,
                     export_content_performance_to_sheet,
-                    list(payload.get("rows") or []),
+                    payload.get("rows") or [],
                 )
             else:
                 logger.warning("Unknown sheets worker item kind: %s", kind)
 
-            queue.task_done()
         except asyncio.CancelledError:
             logger.info("Sheets worker cancelled")
             break
         except Exception:
             logger.exception("Unhandled error in sheets worker")
             await asyncio.sleep(1)
+        finally:
+            if item is not None:
+                queue.task_done()
 
 
 def _get_credentials() -> ServiceAccountCredentials:

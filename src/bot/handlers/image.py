@@ -532,7 +532,6 @@ async def _run_batch_processing(
         f"⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️ 0%"
     )
 
-    tasks = []
     progress_counter = {"processed": 0, "total": len(file_id_groups)}
 
     async def update_progress():
@@ -552,21 +551,30 @@ async def _run_batch_processing(
         except Exception:
             pass
 
-    for idx, file_ids in enumerate(file_id_groups, start=1):
-        async def task_wrapper(i: int, ids: list[str], b: Bot):
-            res = await process_single_video_by_file_ids(i, ids, b, batch_id=batch_id)
-            await update_progress()
-            return res
-        tasks.append(task_wrapper(idx, file_ids, bot))
+    async def task_wrapper(i: int, ids: list[str], b: Bot):
+        res = await process_single_video_by_file_ids(i, ids, b, batch_id=batch_id)
+        await update_progress()
+        return res
 
+    # Do not create one coroutine per incoming video: each one can retain its
+    # screenshot bytes and AI response until the entire album completes.
+    # Processing in small waves bounds the bot's peak resident memory.
     results: list[VideoProcessingResult] = []
-    processed_results = await asyncio.gather(*tasks, return_exceptions=True)
-    for res in processed_results:
-        if isinstance(res, VideoProcessingResult):
-            results.append(res)
-        elif isinstance(res, Exception):
-            logger.error("Critical error in worker task batch_id=%s: %s", batch_id, res)
-            results.append(VideoProcessingResult(index=0, success=False, error_message=str(res)))
+    for first_index in range(0, len(file_id_groups), MAX_CONCURRENT_ANALYSIS):
+        task_batch = [
+            task_wrapper(index, file_ids, bot)
+            for index, file_ids in enumerate(
+                file_id_groups[first_index : first_index + MAX_CONCURRENT_ANALYSIS],
+                start=first_index + 1,
+            )
+        ]
+        processed_results = await asyncio.gather(*task_batch, return_exceptions=True)
+        for res in processed_results:
+            if isinstance(res, VideoProcessingResult):
+                results.append(res)
+            elif isinstance(res, Exception):
+                logger.error("Critical error in worker task batch_id=%s: %s", batch_id, res)
+                results.append(VideoProcessingResult(index=0, success=False, error_message=str(res)))
 
     results.sort(key=lambda r: r.index)
 
@@ -636,8 +644,6 @@ async def _run_batch_processing(
                     saved_count += 1
                     if GOOGLE_SHEET_ID:
                         try:
-                            if res.raw_response:
-                                res.ai_result["raw_response"] = res.raw_response
                             logger.info(
                                 "Queueing Google Sheets export batch_id=%s video_index=%s",
                                 batch_id,
